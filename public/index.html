@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HKAT 閱讀理解生成器 | Comprehension Generator</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>✍️ HKAT 閱讀理解生成器</h1>
+      <p class="subtitle">上載樣本 → AI 建立資料庫 → 生成全新理解題</p>
+    </div>
+    <div class="header-right">
+      <span id="ai-badge" class="ai-badge" title="AI 狀態">AI：讀取中…</span>
+      <button class="btn btn-ghost" id="btn-settings">⚙️ 設定 Settings</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="samples">📚 樣本庫 Samples <span id="tab-count-samples" class="tab-count"></span></button>
+    <button class="tab" data-tab="analysis">📊 風格分析 Analysis <span id="tab-stale-dot" class="stale-dot hidden" title="資料庫有更新，請重新分析"></span></button>
+    <button class="tab" data-tab="generate">✨ 生成 Generate</button>
+    <button class="tab" data-tab="history">🕘 歷史 History</button>
+  </nav>
+
+  <main>
+    <!-- ============ SAMPLES ============ -->
+    <section id="tab-samples" class="panel active">
+      <div class="card">
+        <h2>上載 HKAT comprehension 樣本</h2>
+        <p class="muted">上載 PDF 後，AI 會自動抽出文章和題目，加入你的資料庫。資料庫越豐富，生成的題目就越似你自己的風格。</p>
+        <div id="dropzone" class="dropzone">
+          <div class="drop-icon">📄</div>
+          <p><strong>拖拉 PDF 到這裡</strong>，或</p>
+          <button class="btn btn-primary" id="btn-choose">選擇 PDF 檔案 Choose files</button>
+          <input type="file" id="file-input" accept=".pdf,application/pdf" multiple hidden>
+          <p class="muted small">支援一次過上載多份 PDF（每份 ≤ 30MB）</p>
+        </div>
+        <details class="paste-box">
+          <summary>沒有 PDF？直接貼上文字（文章＋題目）／ No PDF? Paste the text instead</summary>
+          <textarea id="paste-text" rows="8" placeholder="在此貼上完整的文章及題目、答案…… / Paste the full passage and questions here…"></textarea>
+          <button class="btn btn-secondary" id="btn-paste-add">加入資料庫 Add to database</button>
+        </details>
+        <div id="upload-result" class="upload-result"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>資料庫 Database <span id="sample-summary" class="muted"></span></h2>
+          <div class="card-actions">
+            <button class="btn btn-ghost" id="btn-refresh-samples">🔄 重新整理</button>
+            <button class="btn btn-secondary" id="btn-analyse-top">📊 分析資料庫 Analyse</button>
+          </div>
+        </div>
+        <div id="samples-list" class="samples-list"><p class="muted">載入中…</p></div>
+      </div>
+    </section>
+
+    <!-- ============ ANALYSIS ============ -->
+    <section id="tab-analysis" class="panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>📊 資料庫風格分析 Style profile</h2>
+          <button class="btn btn-primary" id="btn-analyse">分析資料庫 Analyse database</button>
+        </div>
+        <p class="muted">AI 會統計你所有樣本的篇幅、難度、題型比例和題目用語，寫成一份「風格檔」。生成新題目時會跟足這份風格檔。</p>
+        <label class="type-item" style="max-width:380px">
+          <input type="checkbox" id="auto-analyse" checked>
+          <span><span class="t-zh">上載後自動更新風格檔</span><span class="t-desc">每次上載新樣本後自動重新分析（會用少許 AI 額度）/ Auto re-analyse after uploads</span></span>
+        </label>
+        <div id="analysis-meta" class="analysis-meta"></div>
+        <div id="stats-charts" class="stats-charts"></div>
+        <div id="analysis-profile"></div>
+      </div>
+    </section>
+
+    <!-- ============ GENERATE ============ -->
+    <section id="tab-generate" class="panel">
+      <div class="grid-2">
+        <div class="card">
+          <h2>✨ 生成參數 Generator</h2>
+          <form id="gen-form">
+            <label class="field">
+              <span>語言 Language</span>
+              <div class="segmented" id="lang-seg">
+                <button type="button" class="seg active" data-value="en">English 英文</button>
+                <button type="button" class="seg" data-value="zh">中文</button>
+              </div>
+            </label>
+
+            <label class="field">
+              <span>主題 Topic</span>
+              <input type="text" id="f-topic" placeholder="e.g. 環保 environmental protection, a school sports day">
+            </label>
+
+            <label class="field">
+              <span>文章內容／大意 Passage theme <em class="opt">(選填 optional)</em></span>
+              <textarea id="f-theme" rows="2" placeholder="例如：一個學生在暴雨中幫助老人家的故事 / e.g. a story about helping an old man in a rainstorm"></textarea>
+            </label>
+
+            <div class="field-row">
+              <label class="field">
+                <span>文章長度 Words</span>
+                <div class="num-control">
+                  <input type="number" id="f-words" min="100" max="900" step="10" value="250">
+                </div>
+                <input type="range" id="f-words-range" min="100" max="900" step="10" value="250">
+              </label>
+              <label class="field">
+                <span>題目數量 Questions</span>
+                <div class="num-control">
+                  <input type="number" id="f-questions" min="1" max="20" value="5">
+                </div>
+                <input type="range" id="f-questions-range" min="1" max="20" value="5">
+              </label>
+            </div>
+
+            <label class="field">
+              <span>程度 Level</span>
+              <div class="segmented" id="level-seg">
+                <button type="button" class="seg" data-value="p4">小四 P4</button>
+                <button type="button" class="seg active" data-value="p5">小五 P5</button>
+                <button type="button" class="seg" data-value="p6">小六 P6</button>
+              </div>
+            </label>
+
+            <div class="field">
+              <span>題型 Question types</span>
+              <div id="type-grid" class="type-grid"></div>
+              <div class="type-quick">
+                <button type="button" class="btn btn-mini" id="btn-types-all">全選 All</button>
+                <button type="button" class="btn btn-mini" id="btn-types-none">全不選 None</button>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>其他要求 Extra instructions <em class="opt">(選填 optional)</em></span>
+              <textarea id="f-extra" rows="2" placeholder="例如：加入至少兩題高階思維題 / e.g. include at least two higher-order questions"></textarea>
+            </label>
+
+            <button type="submit" class="btn btn-primary btn-large btn-block" id="btn-generate">🚀 生成練習 Generate</button>
+            <p id="gen-hint" class="muted small"></p>
+          </form>
+        </div>
+
+        <div class="card" id="result-card">
+          <div class="card-head">
+            <h2>📄 生成結果 Result</h2>
+            <div class="card-actions">
+              <button class="btn btn-mini" id="btn-toggle-answers">🙈 隱藏答案</button>
+              <button class="btn btn-mini" id="btn-copy">📋 複製</button>
+              <button class="btn btn-mini" id="btn-md">⬇️ Markdown</button>
+              <button class="btn btn-mini" id="btn-print">🖨️ 列印</button>
+            </div>
+          </div>
+          <div id="gen-status"></div>
+          <div id="gen-result"><p class="muted">未有生成內容。請在左邊設定參數，然後按「生成練習」。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section id="tab-history" class="panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>🕘 以往生成的練習 Previous papers</h2>
+          <button class="btn btn-ghost" id="btn-refresh-history">🔄 重新整理</button>
+        </div>
+        <div id="history-list"><p class="muted">載入中…</p></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ SETTINGS MODAL ============ -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="card-head">
+        <h2>⚙️ AI 設定 Settings</h2>
+        <button class="btn btn-ghost" id="btn-close-settings">✕</button>
+      </div>
+      <p class="muted">支援任何 OpenAI 相容的 API：OpenAI、DeepSeek、Groq、OpenRouter，或本地 Ollama / LM Studio。<br>
+        OpenAI-compatible API. You can also put the key in the <code>.env</code> file instead.</p>
+      <label class="field"><span>API Base URL</span><input type="text" id="s-base" placeholder="https://api.openai.com/v1"></label>
+      <label class="field"><span>API Key</span><input type="password" id="s-key" placeholder="sk-…"></label>
+      <label class="field"><span>Model</span><input type="text" id="s-model" placeholder="gpt-4o-mini"></label>
+      <div class="card-actions">
+        <button class="btn btn-primary" id="btn-save-settings">💾 儲存 Save</button>
+        <span id="settings-status" class="muted small"></span>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer muted small">HKAT 閱讀理解生成器 · 資料只存於本機 · All data stays on this computer</footer>
+
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
