@@ -1,10 +1,20 @@
-// Step 3: generate a brand-new comprehension passage + questions in the database's style.
+// Step 3: generate brand-new comprehension papers in the database's style.
+// Modes: single paper · 3 variants · same story at P4/P5/P6 (differentiated set).
+import { randomUUID } from 'node:crypto';
 import { chatJSON } from './ai.js';
 import { TYPE_IDS, LEVELS } from './question-types.js';
 import { getSamplesForPrompt, getAnalysis, saveHistory } from './db.js';
 import { countWords } from './pdf.js';
+import { selfCheck } from './quality.js';
 
 const LANG_NAMES = { en: 'English', zh: 'Chinese (繁體中文)' };
+const LEVEL_WORDS = { p4: 0.72, p5: 1, p6: 1.3 };
+
+export const MODES = {
+  single: { label: '單份 Single paper', papers: 1 },
+  variants: { label: '3 份變體 3 variants', papers: 3 },
+  levels: { label: '分程度 P4 / P5 / P6 set', papers: 3 },
+};
 
 export function validateParams(params) {
   const errors = [];
@@ -14,6 +24,7 @@ export function validateParams(params) {
   const questionCount = Math.min(20, Math.max(1, Number(params.questionCount) || 5));
   const types = (Array.isArray(params.types) ? params.types : []).filter((t) => TYPE_IDS.includes(t));
   if (!types.length) errors.push('請至少選擇一種題型 (Choose at least one question type).');
+  const mode = MODES[params.mode] ? params.mode : 'single';
   return {
     language,
     level,
@@ -23,6 +34,8 @@ export function validateParams(params) {
     questionCount,
     types,
     extra: String(params.extra || '').trim(),
+    mode,
+    selfCheck: params.selfCheck !== false,
     errors,
   };
 }
@@ -52,12 +65,14 @@ function typeGuide(types, language) {
   return types.map((t) => `- "${t}": ${dict[t]}`).join('\n');
 }
 
-export function buildPrompt(p) {
+export function buildPrompt(p, { hint = '', basePaper = null } = {}) {
   const lang = LANG_NAMES[p.language];
   const level = LEVELS.find((l) => l.id === p.level);
   const profile = getAnalysis();
-  const profileText = profile?.profile ? JSON.stringify(profile.profile).slice(0, 9000) : '(尚未分析資料庫 — the database has not been analysed yet; use standard HKAT conventions)';
-  const refs = getSamplesForPrompt({ language: p.language, level: p.level, types: p.types, topic: p.topic });
+  const profileText = profile?.profile
+    ? JSON.stringify(profile.profile).slice(0, 9000)
+    : '(尚未分析資料庫 — the database has not been analysed yet; use standard HKAT conventions)';
+  const refs = basePaper ? [] : getSamplesForPrompt({ language: p.language, level: p.level, types: p.types, topic: p.topic });
 
   const refText = refs.length
     ? `Real samples from the database (use them ONLY as a style reference — do NOT copy their story, characters or wording):\n\n${refs
@@ -71,6 +86,16 @@ export function buildPrompt(p) {
         })
         .join('\n\n')}`
     : 'No reference samples are available — follow the style profile and standard HKAT conventions.';
+
+  const rewriteText = basePaper
+    ? `You are writing ANOTHER VERSION of an existing paper (same story world, different difficulty).
+Use this paper as your source — keep the same characters, events and theme, but rewrite for the new level.
+Mark it clearly as a rewrite: do NOT copy sentences verbatim; change sentence structure and vocabulary to suit the level.
+
+SOURCE PAPER (level ${basePaper.params?.level}, ${basePaper.wordCount} words):
+Title: ${basePaper.title}
+${String(basePaper.passage || '').slice(0, 3500)}`
+    : '';
 
   return {
     system: `You are a Hong Kong primary school comprehension writer who has written many HKAT-style papers.
@@ -86,8 +111,9 @@ ${typeGuide(p.types, p.language)}
 6. Give marks per question (1–3) so the total is realistic.
 7. Number questions 1..${p.questionCount}. Give a short instruction line for each question or question group.
 8. Write "explanation" for each question: why the answer is correct, in one sentence (same language as the passage).
-9. After the questions, add a model answer key is already inside each question's "answer" field — do not add a separate section.
+9. Answers live inside each question's "answer" field — do not add a separate answer section.
 10. ${p.extra || 'No extra requirements.'}
+${hint ? `11. IMPORTANT: ${hint}` : ''}
 
 Reply with ONLY this JSON object:
 {
@@ -113,28 +139,12 @@ Question types: ${p.types.join(', ')}
 Style profile of the teacher's own sample database:
 ${profileText}
 
-${refText}`,
+${rewriteText ? rewriteText + '\n\n' : ''}${refText}`,
     mock: () => mockPaper(p),
   };
 }
 
-export async function generatePaper(params) {
-  const p = validateParams(params);
-  if (p.errors.length) {
-    const err = new Error(p.errors.join(' '));
-    err.status = 400;
-    throw err;
-  }
-  const prompt = buildPrompt(p);
-  const data = await chatJSON({
-    system: prompt.system,
-    user: prompt.user,
-    temperature: 0.8,
-    maxTokens: 6000,
-    timeoutMs: 300000,
-    mock: prompt.mock,
-  });
-
+function normalisePaper(data, p) {
   const questions = (Array.isArray(data.questions) ? data.questions : []).map((q, i) => ({
     no: Number(q.no) || i + 1,
     type: TYPE_IDS.includes(q.type) ? q.type : p.types[i % p.types.length],
@@ -153,24 +163,100 @@ export async function generatePaper(params) {
     throw err;
   }
 
-  const result = {
+  return {
     title: String(data.title || p.topic || 'Reading Comprehension'),
     passage,
     wordCount: countWords(passage, p.language) || Number(data.word_count) || 0,
     questions,
     notes: String(data.notes || ''),
   };
+}
 
-  const id = saveHistory({
-    params: { language: p.language, level: p.level, topic: p.topic, theme: p.theme, wordLength: p.wordLength, questionCount: p.questionCount, types: p.types, extra: p.extra },
-    language: p.language,
-    title: result.title,
-    passage: result.passage,
-    wordCount: result.wordCount,
-    questions: result.questions,
-    source: 'ai',
+async function generateOne(p, options = {}) {
+  const prompt = buildPrompt(p, options);
+  const data = await chatJSON({
+    system: prompt.system,
+    user: prompt.user,
+    temperature: 0.8,
+    maxTokens: 6000,
+    timeoutMs: 300000,
+    mock: prompt.mock,
   });
-  return { id, ...result, params: p };
+  const paper = normalisePaper(data, p);
+  paper.params = p;
+  paper.language = p.language;
+  return paper;
+}
+
+const VARIANT_HINTS = [
+  'This is version 1 of 3. Make the setting, characters and events completely your own (e.g. a school/sport/shop/animal story).',
+  'This is version 2 of 3. Use a DIFFERENT genre and setting from a typical school story — e.g. science, nature, community, food, technology, or a personal-holiday narrative. Different characters, different events.',
+  'This is version 3 of 3. Again choose a different world from the other two: e.g. an outdoor/adventure, friendship-problem, or how-something-works explanatory text. Different characters, different events.',
+];
+
+function levelPlans(p) {
+  const unique = [p.level, ...['p4', 'p5', 'p6'].filter((lv) => lv !== p.level)];
+  return unique.map((lv) => ({
+    params: { ...p, level: lv, wordLength: Math.round((p.wordLength * (LEVEL_WORDS[lv] || 1)) / 10) * 10 },
+    label: LEVELS.find((l) => l.id === lv)?.zh || lv,
+    hint: lv === p.level ? '' : 'Keep the same story, characters and events as the source paper, but re-tell it at this new level: simpler/shorter sentences and easier words for a lower level; more complex sentences, richer vocabulary and deeper inference for a higher level. Write a fresh set of questions at the new level.',
+  }));
+}
+
+/** Generate 1 or 3 papers, self-check each, save as one set, return them. */
+export async function generateSet(rawParams) {
+  const p = validateParams(rawParams);
+  if (p.errors.length) {
+    const err = new Error(p.errors.join(' '));
+    err.status = 400;
+    throw err;
+  }
+
+  let plans;
+  if (p.mode === 'variants') {
+    plans = VARIANT_HINTS.map((hint, i) => ({ params: p, hint, label: `變體 ${i + 1} Variant ${i + 1}` }));
+  } else if (p.mode === 'levels') {
+    plans = levelPlans(p);
+  } else {
+    plans = [{ params: p, label: '' }];
+  }
+
+  const setId = randomUUID();
+  const papers = [];
+  for (let i = 0; i < plans.length; i++) {
+    const plan = plans[i];
+    const paper = await generateOne(plan.params, {
+      hint: plan.hint,
+      basePaper: p.mode === 'levels' && i > 0 ? papers[0] : null,
+    });
+
+    if (p.selfCheck) {
+      try {
+        paper.quality = await selfCheck(paper, plan.params);
+      } catch (err) {
+        paper.quality = { error: String(err?.message || err).slice(0, 200) };
+      }
+    }
+
+    paper.setId = setId;
+    paper.variantNo = i + 1;
+    paper.variantLabel = plan.label;
+    paper.id = saveHistory({
+      params: plan.params,
+      language: plan.params.language,
+      title: paper.title,
+      passage: paper.passage,
+      wordCount: paper.wordCount,
+      questions: paper.questions,
+      source: 'ai',
+      setId,
+      variantNo: i + 1,
+      quality: paper.quality || null,
+    });
+    papers.push(paper);
+  }
+
+  return { setId, papers, params: p, mode: p.mode };
 }
 
 /* ------------------- mock paper (MOCK_AI=1) ------------------- */
@@ -181,15 +267,14 @@ function mockPaper(p) {
     const type = p.types[i % p.types.length];
     const no = i + 1;
     if (isZh) {
-      const base = {
+      return {
         no, type, marks: type === 'keywords' || type === 'connection' ? 2 : 1,
-        instruction: type === 'cloze' ? '選擇最適當的答案。' : type === 'keywords' ? '根據文章，回答下列問題。' : '根據文章，回答下列問題。',
+        instruction: type === 'cloze' ? '選擇最適當的答案。' : '根據文章，回答下列問題。',
         stem: `（模擬題目）第 ${no} 題 — 請設定 API Key 以產生真實題目。`,
         options: type === 'cloze' || type === 'sequencing' ? ['A. 選項一', 'B. 選項二', 'C. 選項三'] : [],
         answer: type === 'true' ? 'T' : type === 'not_true' ? 'F：正確句子……' : '（答案）',
         explanation: '模擬答案。',
       };
-      return base;
     }
     return {
       no, type, marks: type === 'keywords' || type === 'connection' ? 2 : 1,

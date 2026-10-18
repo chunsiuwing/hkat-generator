@@ -206,6 +206,20 @@ input[type="range"] { width: 100%; accent-color: var(--primary); margin-top: 6px
 .hide-answers .answer { display: none; }
 .paper-notes { margin-top: 14px; background: #fffbeb; border-left: 3px solid var(--amber); padding: 8px 12px; border-radius: 0 8px 8px 0; font-size: .86rem; }
 
+/* ---------- variants ---------- */
+.variant-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.variant-tab {
+  border: 1.5px solid var(--line); background: #fcfcff; border-radius: 10px; padding: 6px 13px;
+  cursor: pointer; font-family: inherit; font-size: .85rem; color: var(--muted);
+}
+.variant-tab:hover { border-color: var(--primary); }
+.variant-tab.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); font-weight: 600; }
+.q-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .74rem; font-weight: 600; }
+.q-good { background: #dcfce7; color: #166534; }
+.q-warn { background: #fef3c7; color: #92400e; }
+.q-bad { background: #fee2e2; color: #be123c; }
+.q-issues { font-size: .8rem; color: var(--muted); margin: 6px 0 0; padding-left: 18px; }
+
 /* ---------- history ---------- */
 .history-row {
   display: flex; justify-content: space-between; gap: 12px; align-items: center;

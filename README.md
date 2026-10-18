@@ -7,7 +7,21 @@ A local web app for Hong Kong primary teachers:
 1. 📚 **上載樣本 Upload samples** — 把 HKAT comprehension PDF（或直接貼文字）交給程式，AI 自動抽出文章、題目、答案，存入本機 SQLite 資料庫。重複檔案會自動跳過，資料庫會隨你上載的樣本越來越大。
 2. 📊 **風格分析 Analyse** — AI 統計所有樣本的篇幅、程度、題型比例、題干用語、答案格式，寫成一份「風格檔」(style profile)。之後每次上載新樣本，程式會提示你重新分析，令風格越嚟越準。
 3. ✨ **生成 Generate** — 選擇：主題、文章大意、字數、程度（小四/小五/小六）、題目數量、題型（選詞填空、事件排序、是非題、錯處更正、代詞指涉、關鍵詞作答、內意連結、生詞詞義）、語言（英文／中文）。AI 會按照你的風格檔＋最相似的幾份真實樣本作參考，寫一份**從未見過的新文章**和完整題目、答案、分數。
-4. 🕘 **歷史 History** — 每份生成的練習都會存起來，隨時重看、列印或下載 Markdown。
+
+   **生成模式 Generation modes：**
+   - **單份 Single** — 一份練習
+   - **3 份變體 Variants** — 同一組參數，生成 3 份故事完全不同的練習，逐份比較
+   - **分程度 Differentiated set** — 同一個故事，分別寫成小四／小五／小六程度（適合程度差異大的班）
+
+   **AI 自動檢查 Self-check：** 生成後 AI 會再檢查一次：每條答案係咪真係喺文章入面、字數、程度、題型要求，有錯會自動修正，並俾一個「質量分」(0–100)。
+
+4. 🧑‍🎓 **學生連結 Student mode** — 按一下「學生連結」，把網址發給學生；學生喺瀏覽器作答，交卷即時自動批改，你喺「📊 成績」睇到全班分數同逐題對錯。唔使印、唔使改。
+
+5. ⬇️ **Word 匯出** — 每份練習都可以下載 .docx：**學生卷**（文章＋題目＋答題線）同**答案卷**（含答案、分數、答案總表），A4 排版直接印得。
+
+6. 🔍 **掃描檔 OCR** — 上載掃描 PDF 或相片，程式會自動辨識文字再交俾 AI 整理（可在「掃描檔設定」揀英文/繁中/中英混合）。
+
+7. 🕘 **歷史 History** — 每份生成的練習都會存起來，隨時重看、下載 Word、發學生連結、睇成績或列印。
 
 所有資料只存於你自己的電腦（`data/app.db`），不會上載到任何雲端（AI 呼叫除外）。
 
@@ -97,11 +111,15 @@ hkat-generator/
 │  ├─ index.js      API 路由
 │  ├─ db.js         SQLite 資料庫（node:sqlite，免安裝原生模組）
 │  ├─ pdf.js        PDF 文字抽取及清理（unpdf / pdf.js）
-│  ├─ ingest.js     上載 → AI 結構化 → 入庫
+│  ├─ ingest.js     上載 → AI 結構化 → 入庫（含 OCR 後備）
+│  ├─ ocr.js        掃描檔／相片 OCR（tesseract.js）
 │  ├─ analyze.js    資料庫統計 + AI 風格檔
-│  ├─ generate.js   生成新文章及題目（風格檔 + 相似樣本作參考）
-│  └─ ai.js         OpenAI 相容 API 用戶端
-├─ public/          網頁介面（純 HTML/CSS/JS）
+│  ├─ generate.js   生成新文章及題目（單份／3 變體／分程度）
+│  ├─ quality.js    AI 自動檢查＋質量分
+│  ├─ mark.js       學生作答自動批改
+│  ├─ docx.js       Word 匯出（學生卷／答案卷）
+│  └─ ai.js         OpenAI 相容 API 用戶端（含連接測試）
+├─ public/          網頁介面（純 HTML/CSS/JS）＋學生練習頁 student.html
 ├─ data/            app.db 及上載的 PDF（自動建立）
 └─ .env             API key 及設定
 ```

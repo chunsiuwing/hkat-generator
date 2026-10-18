@@ -10,13 +10,18 @@ import { fileURLToPath } from 'node:url';
 import {
   all, get, run, getSetting, setSetting, UPLOAD_DIR,
   listSamples, getSample, saveAnalysis, getAnalysis, processedSampleCount, safeParse,
+  getPaper, getPaperByToken, setShareToken, saveSubmission, listSubmissions, submissionCount,
 } from './db.js';
 import { extractPdfText, normalizePages, countWords } from './pdf.js';
 import { structureSample, normaliseSample, fallbackSample } from './ingest.js';
 import { computeStats, runAnalysis, analysisStale } from './analyze.js';
-import { generatePaper } from './generate.js';
+import { generateSet, MODES } from './generate.js';
+import { buildDocx } from './docx.js';
+import { markSubmission } from './mark.js';
+import { ocrPdf, ocrImage, OCR_LANGUAGES } from './ocr.js';
 import { getAIConfigStatus, setAIConfig, AIError, PROVIDERS, testAIConnection, friendlyAIError } from './ai.js';
 import { QUESTION_TYPES, LEVELS } from './question-types.js';
+import { randomBytes } from 'node:crypto';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -36,8 +41,8 @@ const upload = multer({
   }),
   limits: { fileSize: 30 * 1024 * 1024, files: 20 },
   fileFilter: (req, file, cb) => {
-    if (/pdf$/i.test(file.mimetype) || /\.pdf$/i.test(file.originalname)) cb(null, true);
-    else cb(new Error('只接受 PDF 檔案 (only PDF files are accepted)'));
+    if (/pdf$/i.test(file.mimetype) || /\.(pdf|jpe?g|png)$/i.test(file.originalname)) cb(null, true);
+    else cb(new Error('只接受 PDF 或圖片檔（PDF / JPG / PNG，掃描檔會自動 OCR）'));
   },
 });
 
@@ -85,11 +90,30 @@ async function processSample(id, filePath) {
   try {
     if (!rawText) {
       const buffer = readFileSync(filePath || join(UPLOAD_DIR, row.filename));
-      const extracted = await extractPdfText(buffer);
-      pages = extracted.totalPages;
-      rawText = normalizePages(extracted.pages);
+      const ocrLang = getSetting('ocr_languages') || 'eng+chi_tra';
+
+      if (/\.(jpe?g|png)$/i.test(row.filename)) {
+        // Photo / scan of a page → straight to OCR.
+        run(`UPDATE samples SET status = 'ocring' WHERE id = ?`, [id]);
+        rawText = await ocrImage(buffer, { languages: ocrLang });
+        pages = 1;
+      } else {
+        const extracted = await extractPdfText(buffer);
+        pages = extracted.totalPages;
+        rawText = normalizePages(extracted.pages);
+
+        if (!rawText || rawText.replace(/\s/g, '').length < 60) {
+          // Scanned PDF (image-only): render each page and OCR it.
+          console.log(`[ingest] #${id} little text found — trying OCR…`);
+          run(`UPDATE samples SET status = 'ocring' WHERE id = ?`, [id]);
+          const ocrPages = await ocrPdf(buffer, { languages: ocrLang });
+          const ocrText = normalizePages(ocrPages);
+          if (ocrText.replace(/\s/g, '').length > (rawText || '').replace(/\s/g, '').length) rawText = ocrText;
+        }
+      }
+
       if (!rawText || rawText.replace(/\s/g, '').length < 40) {
-        throw new Error('PDF 內沒有可抽取的文字（可能是掃描圖片檔）。請改用文字版 PDF 或使用「貼上文字」。');
+        throw new Error('這份檔案抽不到文字（可能是圖片質素太低或並非文字檔）。可以試下：用文字版 PDF、上載清晰啲的相片、或者用「貼上文字」。');
       }
       run(`UPDATE samples SET raw_text = ?, pages = ?, status = 'structuring' WHERE id = ?`, [rawText, pages, id]);
     } else {
@@ -133,7 +157,15 @@ async function processSample(id, filePath) {
 /* ----------------------------- API: meta ----------------------------- */
 
 app.get('/api/meta', (req, res) => {
-  res.json({ questionTypes: QUESTION_TYPES, levels: LEVELS, ai: getAIConfigStatus(), providers: PROVIDERS });
+  res.json({
+    questionTypes: QUESTION_TYPES,
+    levels: LEVELS,
+    ai: getAIConfigStatus(),
+    providers: PROVIDERS,
+    modes: MODES,
+    ocrLanguages: OCR_LANGUAGES,
+    ocrLanguage: getSetting('ocr_languages') || 'eng+chi_tra',
+  });
 });
 
 app.get('/api/providers', (req, res) => res.json({ providers: PROVIDERS }));
@@ -229,33 +261,108 @@ app.post('/api/analysis/run', async (req, res, next) => {
 
 app.post('/api/generate', async (req, res, next) => {
   try {
-    const paper = await generatePaper(req.body || {});
-    res.json({ paper });
+    const result = await generateSet(req.body || {});
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+/* ------------------------- API: share & marking ------------------------- */
+
+// Turn any paper into a student link (no answers shown, auto-marked).
+app.post('/api/papers/:id/share', (req, res) => {
+  const id = Number(req.params.id);
+  const paper = getPaper(id);
+  if (!paper) return res.status(404).json({ error: '找不到這份練習 (paper not found)' });
+  let token = paper.share_token;
+  if (!token) {
+    token = randomBytes(6).toString('hex');
+    setShareToken(id, token);
+  }
+  res.json({ token, url: `/s/${token}` });
+});
+
+// The student's view: passage + questions, NO answers.
+app.get('/api/share/:token', (req, res) => {
+  const paper = getPaperByToken(req.params.token);
+  if (!paper) return res.status(404).json({ error: '連結無效或已取消 (invalid link)' });
+  res.json({
+    paper: {
+      id: paper.id,
+      title: paper.title,
+      passage: paper.passage,
+      wordCount: paper.word_count,
+      language: paper.language,
+      level: paper.params?.level,
+      questions: (paper.questions || []).map((q) => ({
+        no: q.no, type: q.type, marks: q.marks, instruction: q.instruction, stem: q.stem, options: q.options,
+      })),
+    },
+  });
+});
+
+app.post('/api/share/:token/submit', (req, res) => {
+  const paper = getPaperByToken(req.params.token);
+  if (!paper) return res.status(404).json({ error: '連結無效或已取消 (invalid link)' });
+  const answers = req.body?.answers || {};
+  const student = String(req.body?.student || '').slice(0, 40);
+  const marking = markSubmission(paper, answers);
+  saveSubmission({ paperId: paper.id, student, answers, marking, score: marking.score, maxScore: marking.max });
+  res.json({ score: marking.score, max: marking.max, perQuestion: marking.perQuestion });
+});
+
+// Teacher view: who has submitted and how they scored.
+app.get('/api/papers/:id/submissions', (req, res) => {
+  res.json({ submissions: listSubmissions(Number(req.params.id)) });
+});
+
+/* ------------------------- API: Word export ------------------------- */
+
+app.get('/api/papers/:id/docx', async (req, res, next) => {
+  try {
+    const paper = getPaper(Number(req.params.id));
+    if (!paper) return res.status(404).json({ error: '找不到這份練習 (paper not found)' });
+    const version = req.query.version === 'teacher' ? 'teacher' : 'student';
+    const buffer = await buildDocx(paper, version);
+    const name = `${String(paper.title || 'comprehension').replace(/[\\/:*?"<>|]+/g, '_')}-${version}.docx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.send(Buffer.from(buffer));
   } catch (err) { next(err); }
 });
 
 /* ----------------------------- API: history ----------------------------- */
 
 app.get('/api/history', (req, res) => {
-  const rows = all('SELECT id, params, language, title, word_count, questions, source, error, created_at FROM history ORDER BY id DESC LIMIT 100');
+  const rows = all(`SELECT id, params, language, title, word_count, questions, source, error, created_at,
+                           set_id, variant_no, quality, share_token
+                    FROM history ORDER BY id DESC LIMIT 150`);
   res.json({
-    items: rows.map((r) => ({
-      id: r.id,
-      language: r.language,
-      title: r.title,
-      wordCount: r.word_count,
-      questionCount: safeParse(r.questions, []).length,
-      params: safeParse(r.params, {}),
-      source: r.source,
-      error: r.error,
-      createdAt: r.created_at,
-    })),
+    items: rows.map((r) => {
+      const quality = safeParse(r.quality, null);
+      return {
+        id: r.id,
+        language: r.language,
+        title: r.title,
+        wordCount: r.word_count,
+        questionCount: safeParse(r.questions, []).length,
+        params: safeParse(r.params, {}),
+        source: r.source,
+        error: r.error,
+        createdAt: r.created_at,
+        setId: r.set_id,
+        variantNo: r.variant_no,
+        quality: quality ? { score: quality.score, issues: quality.issues || [], error: quality.error } : null,
+        shareToken: r.share_token,
+        submissions: submissionCount(r.id),
+      };
+    }),
   });
 });
 
 app.get('/api/history/:id', (req, res) => {
   const row = get('SELECT * FROM history WHERE id = ?', [Number(req.params.id)]);
   if (!row) return res.status(404).json({ error: '找不到這份練習 (paper not found)' });
+  const quality = safeParse(row.quality, null);
   res.json({
     paper: {
       id: row.id,
@@ -267,6 +374,11 @@ app.get('/api/history/:id', (req, res) => {
       params: safeParse(row.params, {}),
       language: row.language,
       createdAt: row.created_at,
+      setId: row.set_id,
+      variantNo: row.variant_no,
+      quality,
+      shareToken: row.share_token,
+      submissions: submissionCount(row.id),
     },
   });
 });
@@ -304,6 +416,19 @@ app.post('/api/config/test', async (req, res, next) => {
     if (dirty) setAIConfig(saved);
     res.json(result);
   } catch (err) { next(err); }
+});
+
+// OCR language for scanned papers / photos.
+app.post('/api/config/ocr', (req, res) => {
+  const language = String(req.body?.language || 'eng+chi_tra');
+  setSetting('ocr_languages', language);
+  res.json({ ocrLanguage: language });
+});
+
+/* ------------------------- student worksheet page ------------------------- */
+
+app.get('/s/:token', (req, res) => {
+  res.sendFile(join(__dirname, '..', 'public', 'student.html'));
 });
 
 /* ----------------------------- errors ----------------------------- */

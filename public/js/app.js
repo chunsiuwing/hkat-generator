@@ -3,9 +3,11 @@
 
 /* ------------------------- state ------------------------- */
 const state = {
-  meta: null,          // { questionTypes, levels, ai }
+  meta: null,          // { questionTypes, levels, ai, providers, modes }
   samples: [],
   stats: null,
+  papers: [],          // papers from the last generation (1 or 3)
+  paperIndex: 0,
   paper: null,         // currently displayed paper
   answersVisible: true,
   genBusy: false,
@@ -296,6 +298,16 @@ const segValue = (id) => $(id + ' .seg.active')?.dataset.value;
 
 bindSegmented('#lang-seg');
 bindSegmented('#level-seg');
+bindSegmented('#mode-seg');
+
+const MODE_NOTES = {
+  single: '生成一份練習。',
+  variants: '一次過生成 3 份完全不同故事的練習（用同一組參數）。注意：會用 3 份 AI 額度。',
+  levels: '同一個故事，分別寫成小四／小五／小六程度（適合程度差異大的班）。注意：會用 3 份 AI 額度。',
+};
+$('#mode-seg').addEventListener('click', () => {
+  $('#mode-note').textContent = MODE_NOTES[segValue('#mode-seg')] || '';
+});
 
 // keep number inputs and sliders in sync
 const sync = (a, b) => {
@@ -309,9 +321,12 @@ $('#gen-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   if (state.genBusy) return;
   const types = $$('#type-grid input:checked').map((i) => i.value);
+  const mode = segValue('#mode-seg');
   const params = {
     language: segValue('#lang-seg'),
     level: segValue('#level-seg'),
+    mode,
+    selfCheck: $('#f-selfcheck').checked,
     topic: $('#f-topic').value,
     theme: $('#f-theme').value,
     wordLength: Number($('#f-words').value),
@@ -321,18 +336,22 @@ $('#gen-form').addEventListener('submit', async (e) => {
   };
   if (!types.length) return alert('請至少選擇一種題型。');
 
+  const count = mode === 'single' ? 1 : 3;
   state.genBusy = true;
   const btn = $('#btn-generate');
   btn.disabled = true;
-  btn.innerHTML = `<span class="spinner"></span> 生成中…（約 30–90 秒）`;
-  $('#gen-status').innerHTML = `<div class="busy"><span class="spinner"></span><div>AI 正在撰寫文章及題目，並對照你資料庫的風格…<br><span class="muted small">Writing the passage and questions in your database's style…</span></div></div>`;
+  btn.innerHTML = `<span class="spinner"></span> 生成中… ${count > 1 ? `(約 ${count * 45}–${count * 90} 秒)` : '（約 30–90 秒）'}`;
+  $('#gen-status').innerHTML = `<div class="busy"><span class="spinner"></span><div>AI 正在撰寫${count > 1 ? `${count} 份` : ''}文章及題目${params.selfCheck ? '，之後會自動檢查答案' : ''}…<br><span class="muted small">Writing${count > 1 ? ` ${count} papers` : ' the passage and questions'} in your database's style…</span></div></div>`;
   $('#gen-hint').textContent = '';
   try {
-    const { paper } = await API.post('/api/generate', params);
-    state.paper = paper;
+    const result = await API.post('/api/generate', params);
+    state.papers = result.papers || [];
+    state.paperIndex = 0;
+    state.paper = state.papers[0] || null;
     state.answersVisible = true;
     $('#gen-status').innerHTML = '';
-    renderPaper(paper);
+    renderVariantTabs();
+    if (state.paper) renderPaper(state.paper);
   } catch (err) {
     $('#gen-status').innerHTML = `<div class="error-box">${esc(err.message)}</div>`;
   } finally {
@@ -341,6 +360,34 @@ $('#gen-form').addEventListener('submit', async (e) => {
     btn.innerHTML = '🚀 生成練習 Generate';
   }
 });
+
+/* ------------------------- variant tabs ------------------------- */
+function renderVariantTabs() {
+  const box = $('#variant-tabs');
+  if (state.papers.length < 2) { box.innerHTML = ''; return; }
+  box.innerHTML = state.papers.map((p, i) => {
+    const badge = qualityBadge(p.quality);
+    return `<button type="button" class="variant-tab${i === state.paperIndex ? ' on' : ''}" data-v="${i}">${esc(p.variantLabel || `第 ${i + 1} 份`)} ${badge}</button>`;
+  }).join('');
+}
+$('#variant-tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-v]');
+  if (!btn) return;
+  state.paperIndex = Number(btn.dataset.v);
+  state.paper = state.papers[state.paperIndex];
+  state.answersVisible = true;
+  renderVariantTabs();
+  renderPaper(state.paper);
+});
+
+function qualityBadge(quality) {
+  if (!quality) return '';
+  if (quality.error) return `<span class="q-badge q-warn" title="${esc(quality.error)}">檢查失敗</span>`;
+  const s = Number(quality.score);
+  const cls = s >= 90 ? 'q-good' : s >= 75 ? 'q-warn' : 'q-bad';
+  const issues = (quality.issues || []).length ? `\n問題：${quality.issues.join('\n')}` : '';
+  return `<span class="q-badge ${cls}" title="${esc(`AI 質量分 ${s}/100${issues}`)}">質量 ${s}</span>`;
+}
 
 /* ------------------------- paper rendering ------------------------- */
 function renderPaper(paper) {
@@ -377,13 +424,60 @@ function renderPaper(paper) {
         <span class="badge">約 ${paper.wordCount} 字</span>
         <span class="badge">${(paper.questions || []).length} 題 · ${totalMarks} 分</span>
         ${types.map((t) => `<span class="badge type">${esc(typeById(t)?.zh || t)}</span>`).join('')}
+        ${qualityBadge(paper.quality)}
       </div>
+      ${paper.quality?.issues?.length
+        ? `<ul class="q-issues">${paper.quality.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+        : ''}
+      ${paper.quality?.fixesApplied ? `<p class="muted small">AI 自動修正了 ${paper.quality.fixesApplied} 個答案/題目。</p>` : ''}
       <div class="passage-box">${esc(paper.passage)}</div>
       ${questionsHtml}
       ${paper.notes ? `<div class="paper-notes">💡 ${esc(paper.notes)}</div>` : ''}
     </div>`;
   updateAnswerToggle();
 }
+
+/* ------------------------- export / share / results ------------------------- */
+const currentPaperId = () => state.paper?.id;
+
+for (const [sel, version] of [['#btn-docx-student', 'student'], ['#btn-docx-teacher', 'teacher']]) {
+  $(sel).addEventListener('click', () => {
+    if (!currentPaperId()) return alert('請先生成練習。');
+    window.open(`/api/papers/${currentPaperId()}/docx?version=${version}`, '_blank');
+  });
+}
+
+$('#btn-share').addEventListener('click', async (e) => {
+  const id = currentPaperId();
+  if (!id) return alert('請先生成練習。');
+  const btn = e.currentTarget;
+  try {
+    const { url } = await API.post(`/api/papers/${id}/share`, {});
+    const full = location.origin + url;
+    await navigator.clipboard.writeText(full);
+    btn.textContent = '✅ 已複製連結';
+    setTimeout(() => (btn.textContent = '🧑‍🎓 學生連結'), 2000);
+  } catch (err) { alert(err.message); }
+});
+
+$('#btn-results').addEventListener('click', async () => {
+  const id = currentPaperId();
+  if (!id) return alert('請先生成練習。');
+  const { submissions } = await API.get(`/api/papers/${id}/submissions`);
+  if (!submissions.length) {
+    return openInfoModal('📊 學生成績', `<p class="muted">還沒有學生交卷。<br>按「🧑‍🎓 學生連結」複製連結發給學生，他們交卷後成績會即時顯示在這裡。</p>`);
+  }
+  const rows = submissions.map((s) => {
+    const pct = s.maxScore ? Math.round((s.score / s.maxScore) * 100) : 0;
+    return `<div class="history-row">
+      <div><strong>${esc(s.student || '匿名')}</strong>
+        <div class="sample-meta"><span>${s.score} / ${s.maxScore} 分（${pct}%）</span><span>${esc(s.createdAt)}</span></div>
+      </div>
+      <div>${(s.marking?.perQuestion || []).map((q) => `<span class="badge ${q.correct ? 'type' : 'err'}">${q.no}</span>`).join('')}</div>
+    </div>`;
+  }).join('');
+  openInfoModal('📊 學生成績', `<p class="muted small">共 ${submissions.length} 人交卷</p>${rows}`);
+});
 
 function updateAnswerToggle() {
   $('#current-paper')?.classList.toggle('hide-answers', !state.answersVisible);
@@ -445,22 +539,32 @@ async function loadHistory() {
     const { items } = await API.get('/api/history');
     const box = $('#history-list');
     if (!items.length) { box.innerHTML = '<p class="muted">還沒有生成過練習。</p>'; return; }
-    box.innerHTML = items.map((h) => `
+    box.innerHTML = items.map((h) => {
+      const level = levelById(h.params?.level)?.zh || '';
+      return `
       <div class="history-row">
         <div>
           <strong>${esc(h.title || '無標題')}</strong>
+          ${h.setId ? `<span class="badge">${h.variantNo > 1 ? `第 ${h.variantNo} 份` : '套裝 set'}</span>` : ''}
+          ${qualityBadge(h.quality)}
           <div class="sample-meta">
             <span class="badge ${h.language}">${h.language === 'zh' ? '中文' : 'English'}</span>
-            <span class="badge level">${esc(levelById(h.params?.level)?.zh || '')}</span>
+            ${level ? `<span class="badge level">${esc(level)}</span>` : ''}
             <span>約 ${h.wordCount} 字</span><span>${h.questionCount} 題</span><span>${esc(h.createdAt)}</span>
+            ${h.submissions ? `<span class="badge type">🧑‍🎓 ${h.submissions} 人交卷</span>` : ''}
+            ${h.shareToken ? `<span class="badge">🔗 已分享</span>` : ''}
           </div>
         </div>
         <div class="sample-actions">
           <button class="btn btn-mini" data-hact="open" data-id="${h.id}">👁 開啟</button>
-          <button class="btn btn-mini" data-hact="print" data-id="${h.id}">🖨️ 列印</button>
+          <button class="btn btn-mini" data-hact="docx" data-id="${h.id}">⬇️ Word</button>
+          <button class="btn btn-mini" data-hact="share" data-id="${h.id}">🔗 連結</button>
+          <button class="btn btn-mini" data-hact="results" data-id="${h.id}">📊 成績</button>
+          <button class="btn btn-mini" data-hact="print" data-id="${h.id}">🖨️</button>
           <button class="btn btn-mini btn-danger" data-hact="delete" data-id="${h.id}">🗑</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } catch (err) {
     $('#history-list').innerHTML = `<div class="error-box">${esc(err.message)}</div>`;
   }
@@ -472,15 +576,44 @@ $('#history-list').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-hact]');
   if (!btn) return;
   const id = btn.dataset.id;
-  if (btn.dataset.hact === 'delete') {
+  const act = btn.dataset.hact;
+
+  if (act === 'delete') {
     if (!confirm('確定刪除？')) return;
     await API.del(`/api/history/${id}`);
     loadHistory();
+  } else if (act === 'docx') {
+    window.open(`/api/papers/${id}/docx?version=teacher`, '_blank');
+  } else if (act === 'share') {
+    try {
+      const { url } = await API.post(`/api/papers/${id}/share`, {});
+      await navigator.clipboard.writeText(location.origin + url);
+      btn.textContent = '✅ 已複製';
+      setTimeout(() => (btn.textContent = '🔗 連結'), 1500);
+      loadHistory();
+    } catch (err) { alert(err.message); }
+  } else if (act === 'results') {
+    const { submissions } = await API.get(`/api/papers/${id}/submissions`);
+    openInfoModal('📊 學生成績', submissions.length
+      ? `<p class="muted small">共 ${submissions.length} 人交卷</p>` + submissions.map((s) => `
+          <div class="history-row"><div><strong>${esc(s.student || '匿名')}</strong>
+          <div class="sample-meta"><span>${s.score} / ${s.maxScore} 分</span><span>${esc(s.createdAt)}</span></div></div>
+          <div>${(s.marking?.perQuestion || []).map((q) => `<span class="badge ${q.correct ? 'type' : 'err'}">${q.no}</span>`).join('')}</div></div>`).join('')
+      : '<p class="muted">還沒有學生交卷。</p>');
+  } else if (act === 'print') {
+    const { paper } = await API.get(`/api/history/${id}`);
+    paper.params = paper.params || {};
+    state.papers = [paper]; state.paperIndex = 0; state.paper = paper; state.answersVisible = true;
+    renderPaper(paper);
+    printElement($('#current-paper'));
   } else {
     const { paper } = await API.get(`/api/history/${id}`);
     paper.params = paper.params || {};
+    state.papers = [paper];
+    state.paperIndex = 0;
     state.paper = paper;
     state.answersVisible = true;
+    renderVariantTabs();
     renderPaper(paper);
     gotoTab('generate');
   }
@@ -591,6 +724,16 @@ async function loadAutoSetting() {
   try { const cfg = await API.get('/api/config'); autoBox.checked = cfg.autoAnalyse !== false; } catch { /* ignore */ }
 }
 
+function loadOcrSetting() {
+  const sel = $('#ocr-lang');
+  if (!sel) return;
+  sel.innerHTML = (state.meta.ocrLanguages || []).map((o) => `<option value="${o.id}">${esc(o.label)}</option>`).join('');
+  sel.value = state.meta.ocrLanguage || 'eng+chi_tra';
+  sel.addEventListener('change', async () => {
+    try { await API.post('/api/config/ocr', { language: sel.value }); } catch { /* ignore */ }
+  });
+}
+
 async function init() {
   try {
     state.meta = await API.get('/api/meta');
@@ -604,6 +747,7 @@ async function init() {
   loadAnalysis();
   loadHistory();
   loadAutoSetting();
+  loadOcrSetting();
   if (!state.meta.ai.configured) {
     $('#gen-hint').textContent = '提示：尚未設定 AI API Key，請按右上角「⚙️ 設定」。';
   }

@@ -58,7 +58,22 @@ CREATE TABLE IF NOT EXISTS history (
   questions  TEXT DEFAULT '[]',
   source     TEXT DEFAULT 'ai',
   error      TEXT,
-  created_at TEXT DEFAULT (datetime('now', 'localtime'))
+  created_at TEXT DEFAULT (datetime('now', 'localtime')),
+  set_id     TEXT,
+  variant_no INTEGER DEFAULT 1,
+  quality    TEXT,
+  share_token TEXT
+);
+
+CREATE TABLE IF NOT EXISTS submissions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id    INTEGER NOT NULL,
+  student     TEXT DEFAULT '',
+  answers     TEXT DEFAULT '{}',
+  marking     TEXT DEFAULT '{}',
+  score       INTEGER DEFAULT 0,
+  max_score   INTEGER DEFAULT 0,
+  created_at  TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -66,6 +81,16 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 `);
+
+/* --------------- migrations for databases created before v1.1 --------------- */
+function addColumn(table, column, definition) {
+  try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
+}
+addColumn('history', 'set_id', 'TEXT');
+addColumn('history', 'variant_no', 'INTEGER DEFAULT 1');
+addColumn('history', 'quality', 'TEXT');
+addColumn('history', 'share_token', 'TEXT');
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_history_share ON history(share_token) WHERE share_token IS NOT NULL`);
 
 /* ---------------- helpers ---------------- */
 
@@ -147,13 +172,70 @@ export function getAnalysis() {
   return { profile, sample_count: row.sample_count, languages: safeParse(row.languages, []), generated_at: row.generated_at };
 }
 
-export function saveHistory({ params, language, title, passage, wordCount, questions, source, error }) {
+export function saveHistory({ params, language, title, passage, wordCount, questions, source, error, setId = null, variantNo = 1, quality = null, shareToken = null }) {
   const res = run(
-    `INSERT INTO history (params, language, title, passage, word_count, questions, source, error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [JSON.stringify(params), language, title, passage, wordCount, JSON.stringify(questions), source, error || null]
+    `INSERT INTO history (params, language, title, passage, word_count, questions, source, error, set_id, variant_no, quality, share_token)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      JSON.stringify(params), language, title, passage, wordCount, JSON.stringify(questions), source, error || null,
+      setId, variantNo, quality ? JSON.stringify(quality) : null, shareToken,
+    ]
   );
-  return res.lastInsertRowid;
+  return Number(res.lastInsertRowid);
+}
+
+/* ---------------- share links & student submissions ---------------- */
+
+export function getPaper(id) {
+  const row = get('SELECT * FROM history WHERE id = ?', [Number(id)]);
+  return row ? shapePaper(row) : null;
+}
+
+export function getPaperByToken(token) {
+  const row = get('SELECT * FROM history WHERE share_token = ?', [String(token || '')]);
+  return row ? shapePaper(row) : null;
+}
+
+export function setShareToken(id, token) {
+  run('UPDATE history SET share_token = ? WHERE id = ?', [token, Number(id)]);
+  return token;
+}
+
+export function setPaperQuality(id, quality) {
+  run('UPDATE history SET quality = ? WHERE id = ?', [quality ? JSON.stringify(quality) : null, Number(id)]);
+}
+
+export function saveSubmission({ paperId, student, answers, marking, score, maxScore }) {
+  const res = run(
+    `INSERT INTO submissions (paper_id, student, answers, marking, score, max_score) VALUES (?, ?, ?, ?, ?, ?)`,
+    [Number(paperId), String(student || ''), JSON.stringify(answers), JSON.stringify(marking), Number(score), Number(maxScore)]
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function listSubmissions(paperId) {
+  return all('SELECT * FROM submissions WHERE paper_id = ? ORDER BY id DESC', [Number(paperId)]).map((r) => ({
+    id: r.id,
+    student: r.student,
+    score: r.score,
+    maxScore: r.max_score,
+    answers: safeParse(r.answers, {}),
+    marking: safeParse(r.marking, {}),
+    createdAt: r.created_at,
+  }));
+}
+
+export function submissionCount(paperId) {
+  return get('SELECT COUNT(*) AS n FROM submissions WHERE paper_id = ?', [Number(paperId)])?.n ?? 0;
+}
+
+function shapePaper(row) {
+  return {
+    ...row,
+    params: safeParse(row.params, {}),
+    questions: safeParse(row.questions, []),
+    quality: safeParse(row.quality, null),
+  };
 }
 
 function shapeSample(row) {

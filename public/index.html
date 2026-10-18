@@ -43,6 +43,14 @@
           <textarea id="paste-text" rows="8" placeholder="在此貼上完整的文章及題目、答案…… / Paste the full passage and questions here…"></textarea>
           <button class="btn btn-secondary" id="btn-paste-add">加入資料庫 Add to database</button>
         </details>
+        <details class="paste-box">
+          <summary>掃描檔／相片 OCR 設定 · Scanned paper settings</summary>
+          <div class="field" style="margin-top:10px">
+            <span>OCR 語言（掃描 PDF 或相片會自動辨識文字）</span>
+            <select id="ocr-lang"></select>
+            <p class="muted small">掃描檔第一次會下載辨識語言檔（約 20MB），之後會快很多。OCR 之後 AI 仍會整理成結構化樣本。</p>
+          </div>
+        </details>
         <div id="upload-result" class="upload-result"></div>
       </div>
 
@@ -88,6 +96,16 @@
                 <button type="button" class="seg active" data-value="en">English 英文</button>
                 <button type="button" class="seg" data-value="zh">中文</button>
               </div>
+            </label>
+
+            <label class="field">
+              <span>生成模式 Mode</span>
+              <div class="segmented" id="mode-seg">
+                <button type="button" class="seg active" data-value="single">單份</button>
+                <button type="button" class="seg" data-value="variants">3 份變體</button>
+                <button type="button" class="seg" data-value="levels">分程度</button>
+              </div>
+              <p class="muted small" id="mode-note">生成一份練習。</p>
             </label>
 
             <label class="field">
@@ -140,6 +158,12 @@
               <textarea id="f-extra" rows="2" placeholder="例如：加入至少兩題高階思維題 / e.g. include at least two higher-order questions"></textarea>
             </label>
 
+            <label class="type-item on" style="margin-bottom:12px">
+              <input type="checkbox" id="f-selfcheck" checked>
+              <span><span class="t-zh">生成後自動檢查 AI self-check</span>
+                <span class="t-desc">AI 會核對每條答案是否喺文章入面、字數同程度係咪啱，自動修正並給出質量分（多一次 AI 呼叫）</span></span>
+            </label>
+
             <button type="submit" class="btn btn-primary btn-large btn-block" id="btn-generate">🚀 生成練習 Generate</button>
             <p id="gen-hint" class="muted small"></p>
           </form>
@@ -152,9 +176,14 @@
               <button class="btn btn-mini" id="btn-toggle-answers">🙈 隱藏答案</button>
               <button class="btn btn-mini" id="btn-copy">📋 複製</button>
               <button class="btn btn-mini" id="btn-md">⬇️ Markdown</button>
+              <button class="btn btn-mini" id="btn-docx-student">⬇️ Word 學生卷</button>
+              <button class="btn btn-mini" id="btn-docx-teacher">⬇️ Word 答案卷</button>
+              <button class="btn btn-mini" id="btn-share">🧑‍🎓 學生連結</button>
+              <button class="btn btn-mini" id="btn-results">📊 成績</button>
               <button class="btn btn-mini" id="btn-print">🖨️ 列印</button>
             </div>
           </div>
+          <div id="variant-tabs" class="variant-tabs"></div>
           <div id="gen-status"></div>
           <div id="gen-result"><p class="muted">未有生成內容。請在左邊設定參數，然後按「生成練習」。</p></div>
         </div>

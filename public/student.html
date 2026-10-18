@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>閱讀理解練習 Reading Comprehension</title>
+  <style>
+    :root { --ink:#23234a; --muted:#71718f; --line:#e6e6f2; --primary:#6c4cf1; --green:#16a34a; --rose:#e11d48; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:"Segoe UI","Microsoft JhengHei","PingFang HK",system-ui,sans-serif; background:#f4f5fb; color:var(--ink); line-height:1.7; }
+    .wrap { max-width:820px; margin:0 auto; padding:20px 16px 60px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px 26px; margin-bottom:16px; box-shadow:0 4px 18px rgba(35,35,74,.06); }
+    h1 { margin:0 0 6px; font-size:1.4rem; }
+    .meta { color:var(--muted); font-size:.85rem; margin-bottom:16px; }
+    .passage { white-space:pre-wrap; background:#fbfaff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:20px; font-size:1.02rem; }
+    .inst { font-weight:700; margin:16px 0 6px; color:var(--primary); }
+    .q { border-bottom:1px dashed var(--line); padding:12px 0; }
+    .q:last-child { border-bottom:none; }
+    .stem { margin:4px 0 8px; font-weight:500; }
+    .opts label { display:block; padding:4px 0; cursor:pointer; }
+    .opts input { margin-right:8px; }
+    textarea, input[type=text] { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:10px; font-family:inherit; font-size:.95rem; background:#fcfcff; }
+    textarea { resize:vertical; min-height:56px; }
+    .btn { border:none; background:var(--primary); color:#fff; border-radius:10px; padding:12px 22px; font-size:1rem; cursor:pointer; font-family:inherit; }
+    .btn:hover { filter:brightness(.95); }
+    .btn:disabled { opacity:.5; }
+    .result { text-align:center; padding:20px; }
+    .score { font-size:3rem; font-weight:800; color:var(--primary); }
+    .detail { text-align:left; margin-top:18px; }
+    .row { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); font-size:.92rem; align-items:flex-start; }
+    .tick { font-size:1.1rem; }
+    .ok { color:var(--green); } .no { color:var(--rose); }
+    .ans { color:var(--muted); font-size:.85rem; display:block; }
+    .err { background:#fff1f2; border-left:3px solid var(--rose); padding:10px 14px; border-radius:0 8px 8px 0; color:var(--rose); }
+    footer { text-align:center; color:var(--muted); font-size:.8rem; padding:10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card" id="loading">載入中… Loading…</div>
+
+    <div class="card" id="paper-card" style="display:none">
+      <h1 id="title"></h1>
+      <div class="meta" id="meta"></div>
+      <div class="passage" id="passage"></div>
+      <div class="card" style="padding:14px 16px">
+        <label><strong>你的名字 Your name</strong></label>
+        <input type="text" id="student-name" placeholder="e.g. 陳大文 / Chan Tai Man">
+      </div>
+      <form id="form"></form>
+      <div style="text-align:center;margin-top:18px">
+        <button class="btn" id="submit">✅ 交卷 Submit</button>
+      </div>
+    </div>
+
+    <div class="card" id="result-card" style="display:none">
+      <div class="result">
+        <div>你的分數 Your score</div>
+        <div class="score"><span id="score"></span> / <span id="max"></span></div>
+        <div id="pct"></div>
+      </div>
+      <div class="detail" id="detail"></div>
+    </div>
+
+    <footer>HKAT 閱讀理解生成器 · 學生練習頁 Student worksheet</footer>
+  </div>
+
+  <script>
+    const token = location.pathname.split('/').pop();
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const TYPE = { cloze:'選詞填空', sequencing:'事件排序', true:'是非題 True', not_true:'錯處更正 Not True', referencing:'代詞指涉', keywords:'關鍵詞作答', connection:'內意連結', unfamiliar_word:'生詞詞義' };
+    let paper = null;
+
+    fetch('/api/share/' + token).then(r => r.json()).then(d => {
+      if (d.error) { $('#loading').innerHTML = '<div class="err">' + esc(d.error) + '</div>'; return; }
+      paper = d.paper;
+      $('#loading').style.display = 'none';
+      $('#paper-card').style.display = 'block';
+      $('#title').textContent = paper.title;
+      $('#meta').textContent = (paper.language === 'zh' ? '中文' : 'English') + ' · 約 ' + paper.wordCount + ' 字 · ' + paper.questions.length + ' 題';
+      $('#passage').textContent = paper.passage;
+      let html = '', lastInst = '';
+      for (const q of paper.questions) {
+        if (q.instruction && q.instruction !== lastInst) { lastInst = q.instruction; html += '<div class="inst">' + esc(q.instruction) + '</div>'; }
+        html += '<div class="q"><div class="stem">' + q.no + '. ' + esc(q.stem) + ' <small style="color:#71718f">(' + (q.marks || 1) + ' 分 · ' + (TYPE[q.type] || q.type) + ')</small></div>';
+        if (q.options && q.options.length) {
+          html += '<div class="opts">' + q.options.map(o => '<label><input type="radio" name="q' + q.no + '" value="' + esc(o) + '"> ' + esc(o) + '</label>').join('') + '</div>';
+        } else {
+          html += '<textarea name="q' + q.no + '" placeholder="你的答案 Your answer"></textarea>';
+        }
+        html += '</div>';
+      }
+      $('#form').innerHTML = html;
+    }).catch(e => { $('#loading').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; });
+
+    $('#submit').addEventListener('click', async () => {
+      if (!paper) return;
+      if (!confirm('確定交卷？提交後會即時公佈分數。Submit now?')) return;
+      const answers = {};
+      for (const q of paper.questions) {
+        const checked = document.querySelector('input[name="q' + q.no + '"]:checked');
+        const text = document.querySelector('textarea[name="q' + q.no + '"]');
+        answers[q.no] = checked ? checked.value : (text ? text.value : '');
+      }
+      $('#submit').disabled = true;
+      $('#submit').textContent = '批改中… Marking…';
+      try {
+        const res = await fetch('/api/share/' + token + '/submit', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ student: $('#student-name').value, answers }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        $('#paper-card').style.display = 'none';
+        $('#result-card').style.display = 'block';
+        $('#score').textContent = data.score;
+        $('#max').textContent = data.max;
+        const pct = data.max ? Math.round((data.score / data.max) * 100) : 0;
+        $('#pct').textContent = pct + '%' + (pct >= 80 ? ' 🎉 很好！' : pct >= 50 ? ' 👍 繼續努力！' : ' 💪 多練習一次！');
+        $('#detail').innerHTML = data.perQuestion.map(q =>
+          '<div class="row"><span class="tick ' + (q.correct ? 'ok' : 'no') + '">' + (q.correct ? '✅' : '❌') + '</span>' +
+          '<div><strong>' + q.no + '.</strong> ' + esc(q.given || '（未作答）') +
+          (q.correct ? '' : '<span class="ans">正確答案：' + esc(q.expected) + '</span>') + '</div></div>'
+        ).join('');
+        window.scrollTo(0, 0);
+      } catch (e) {
+        alert('提交失敗：' + e.message);
+        $('#submit').disabled = false;
+        $('#submit').textContent = '✅ 交卷 Submit';
+      }
+    });
+  </script>
+</body>
+</html>
