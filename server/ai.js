@@ -131,3 +131,61 @@ export function parseJSONContent(content) {
     throw new AIError('AI 返回的不是有效的 JSON（AI reply was not valid JSON）。', 502, text.slice(0, 400));
   }
 }
+
+/* ---------------- connection test & friendly hints ---------------- */
+
+export const PROVIDERS = [
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', note: '需要 OpenAI 帳號；部分地區可能被封鎖' },
+  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-chat', note: '一個 key 可用多個模型（模型名要用 provider/model 格式）' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', note: '便宜，中英文都好' },
+  { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', note: '極快，有免費額度' },
+  { id: 'ollama', label: 'Ollama（本地）', baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5:7b', note: '完全離線，要先安裝 Ollama 並 pull 模型' },
+  { id: 'lmstudio', label: 'LM Studio（本地）', baseUrl: 'http://localhost:1234/v1', model: 'local-model', note: '圖形介面的本地模型' },
+];
+
+export function friendlyAIError(status, bodyText) {
+  const text = String(bodyText || '');
+  if (status === 401 || /invalid.*api.?key|incorrect api key|authentication/i.test(text)) {
+    return 'API Key 不正確，或者 Base URL 選錯了（例如用了 OpenRouter 的 key 但 Base URL 仍是 OpenAI）。請檢查兩者是否配對。 (Wrong API key, or Base URL does not match the key provider.)';
+  }
+  if (/not available in your region|geo|region/i.test(text)) {
+    return '這個模型在你所在地區不可用。請改用 deepseek/deepseek-chat、qwen/qwen-2.5-72b-instruct 或 meta-llama/llama-3.3-70b-instruct。 (Model blocked in your region — try one of those instead.)';
+  }
+  if (status === 404 || /model.*not.*found|no endpoints found|does not exist/i.test(text)) {
+    return '模型名稱不正確。OpenRouter 要用「provider/model」格式（例如 openai/gpt-4o-mini、deepseek/deepseek-chat）；其他供應商要用它自己的模型名。 (Wrong model name — OpenRouter needs the "provider/model" format.)';
+  }
+  if (status === 402 || /credits|insufficient|quota|exceeded/i.test(text)) {
+    return '帳戶額度不足或已用完，請到該 AI 供應商的網站充值或檢查用量。 (Out of credits/quota.)';
+  }
+  if (status === 429) {
+    return '請求太頻繁或速率受限，稍等 30 秒再試。 (Rate limited — wait a moment.)';
+  }
+  return `AI 服務回應錯誤 HTTP ${status}。${text.slice(0, 200)}`;
+}
+
+/** Tiny real request to verify key + base URL + model all work together. */
+export async function testAIConnection() {
+  const cfg = getAIConfig();
+  if (!cfg.apiKey) throw new AIError('未設定 API Key。 (No API key set.)', 400);
+  if (process.env.MOCK_AI === '1') return { ok: true, mock: true, model: cfg.model, sample: 'OK (mock)' };
+
+  let res, text;
+  try {
+    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({ model: cfg.model, max_tokens: 8, messages: [{ role: 'user', content: 'Reply with the single word OK' }] }),
+      signal: AbortSignal.timeout(45000),
+    });
+    text = await res.text();
+  } catch (err) {
+    return { ok: false, status: 0, hint: `無法連接 ${cfg.baseUrl}（Check the Base URL and your network）。${err.message}` };
+  }
+
+  if (res.ok) {
+    let sample = '';
+    try { sample = JSON.parse(text)?.choices?.[0]?.message?.content?.trim() || ''; } catch { /* ignore */ }
+    return { ok: true, model: cfg.model, baseUrl: cfg.baseUrl, sample: sample.slice(0, 40) };
+  }
+  return { ok: false, status: res.status, hint: friendlyAIError(res.status, text) };
+}

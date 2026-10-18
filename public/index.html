@@ -180,15 +180,25 @@
         <h2>⚙️ AI 設定 Settings</h2>
         <button class="btn btn-ghost" id="btn-close-settings">✕</button>
       </div>
-      <p class="muted">支援任何 OpenAI 相容的 API：OpenAI、DeepSeek、Groq、OpenRouter，或本地 Ollama / LM Studio。<br>
-        OpenAI-compatible API. You can also put the key in the <code>.env</code> file instead.</p>
-      <label class="field"><span>API Base URL</span><input type="text" id="s-base" placeholder="https://api.openai.com/v1"></label>
-      <label class="field"><span>API Key</span><input type="password" id="s-key" placeholder="sk-…"></label>
-      <label class="field"><span>Model</span><input type="text" id="s-model" placeholder="gpt-4o-mini"></label>
+      <p class="muted">支援任何 OpenAI 相容的 API。先選供應商，再貼上它的 API Key。<br>
+        OpenAI-compatible API — pick a provider, then paste its key.</p>
+
+      <div class="field">
+        <span>供應商 Provider</span>
+        <div id="provider-chips" class="provider-chips"></div>
+        <p id="provider-note" class="muted small"></p>
+      </div>
+
+      <label class="field"><span>API Base URL</span><input type="text" id="s-base" placeholder="https://openrouter.ai/api/v1"></label>
+      <label class="field"><span>API Key</span><input type="password" id="s-key" placeholder="sk-or-…"></label>
+      <label class="field"><span>Model（模型名稱）</span><input type="text" id="s-model" placeholder="deepseek/deepseek-chat"></label>
+
       <div class="card-actions">
         <button class="btn btn-primary" id="btn-save-settings">💾 儲存 Save</button>
+        <button class="btn btn-secondary" id="btn-test-settings">🔌 測試連接 Test</button>
         <span id="settings-status" class="muted small"></span>
       </div>
+      <div id="test-result"></div>
     </div>
   </div>
 

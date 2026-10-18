@@ -33,14 +33,21 @@ npm install        # 首次才需要
 
 程式支援任何 **OpenAI 相容 API**：OpenAI、DeepSeek、Groq、OpenRouter、Azure，或本地 Ollama / LM Studio。
 
-方法一（最簡單）：開啟 http://localhost:3000 → 右上角「⚙️ 設定」→ 貼上 Base URL、API Key、Model → 儲存。
+**推薦（香港）**：選 **OpenRouter**，模型用 `deepseek/deepseek-chat`（中英文都好、便宜）。「⚙️ 設定」有供應商快速選擇，揀完貼 key 就得。
+
+> ⚠️ 用 OpenRouter 時要注意：
+> - Base URL 必須是 `https://openrouter.ai/api/v1`（唔係 OpenAI 嘅網址）
+> - 模型名要用「供應商/模型」格式：`deepseek/deepseek-chat`、`qwen/qwen-2.5-72b-instruct`、`meta-llama/llama-3.3-70b-instruct`
+> - `openai/…` 同 `google/…`（Gemini）模型喺部分地區會被封鎖（HTTP 403 "not available in your region"）；DeepSeek / Qwen / Llama 冇問題
+>
+> 設好之後按 **「🔌 測試連接 Test」**，程式會即刻用你嘅設定發一個小請求：成功顯示 ✅，失敗會講明原因同建議改法。
 
 方法二：編輯 `.env`：
 
 ```env
-OPENAI_API_KEY=sk-xxxxxxxx
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-or-xxxxxxxx
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_MODEL=deepseek/deepseek-chat
 ```
 
 改完 `.env` 要重啟 `start.ps1`。

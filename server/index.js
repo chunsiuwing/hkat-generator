@@ -15,7 +15,7 @@ import { extractPdfText, normalizePages, countWords } from './pdf.js';
 import { structureSample, normaliseSample, fallbackSample } from './ingest.js';
 import { computeStats, runAnalysis, analysisStale } from './analyze.js';
 import { generatePaper } from './generate.js';
-import { getAIConfigStatus, setAIConfig, AIError } from './ai.js';
+import { getAIConfigStatus, setAIConfig, AIError, PROVIDERS, testAIConnection, friendlyAIError } from './ai.js';
 import { QUESTION_TYPES, LEVELS } from './question-types.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -133,8 +133,10 @@ async function processSample(id, filePath) {
 /* ----------------------------- API: meta ----------------------------- */
 
 app.get('/api/meta', (req, res) => {
-  res.json({ questionTypes: QUESTION_TYPES, levels: LEVELS, ai: getAIConfigStatus() });
+  res.json({ questionTypes: QUESTION_TYPES, levels: LEVELS, ai: getAIConfigStatus(), providers: PROVIDERS });
 });
+
+app.get('/api/providers', (req, res) => res.json({ providers: PROVIDERS }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, processed: processedSampleCount() }));
 
@@ -284,6 +286,24 @@ app.post('/api/config', (req, res) => {
   const { baseUrl, apiKey, model, autoAnalyse } = req.body || {};
   if (autoAnalyse !== undefined) setSetting('auto_analyse', autoAnalyse ? '1' : '0');
   res.json({ ...setAIConfig({ baseUrl, apiKey, model }), autoAnalyse: getSetting('auto_analyse') !== '0' });
+});
+
+// Real 1-token request: verifies key + base URL + model actually work together.
+app.post('/api/config/test', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const dirty = body.baseUrl !== undefined || body.model !== undefined || body.apiKey !== undefined;
+    // Allow testing unsaved values from the settings form without changing the real config.
+    const saved = {};
+    for (const [dbKey, apiKey] of [['ai_base_url', 'baseUrl'], ['ai_api_key', 'apiKey'], ['ai_model', 'model']]) {
+      const v = getSetting(dbKey);
+      if (v) saved[apiKey] = v;
+    }
+    if (dirty) setAIConfig(body);
+    const result = await testAIConnection();
+    if (dirty) setAIConfig(saved);
+    res.json(result);
+  } catch (err) { next(err); }
 });
 
 /* ----------------------------- errors ----------------------------- */

@@ -488,29 +488,80 @@ $('#history-list').addEventListener('click', async (e) => {
 
 /* ------------------------- settings modal ------------------------- */
 const modal = $('#settings-modal');
+
+function renderProviderChips(matchUrl = '') {
+  const box = $('#provider-chips');
+  const providers = state.meta?.providers || [];
+  box.innerHTML = providers
+    .map((p) => `<button type="button" class="provider-chip${matchUrl && p.baseUrl === matchUrl ? ' on' : ''}" data-provider="${p.id}">${esc(p.label)}</button>`)
+    .join('');
+}
+
+function applyProvider(id) {
+  const p = (state.meta?.providers || []).find((x) => x.id === id);
+  if (!p) return;
+  $('#s-base').value = p.baseUrl;
+  $('#s-model').value = p.model;
+  $('#provider-note').textContent = p.note;
+  renderProviderChips(p.baseUrl);
+  $('#test-result').innerHTML = '';
+}
+
+$('#provider-chips').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-provider]');
+  if (btn) applyProvider(btn.dataset.provider);
+});
+$('#s-base').addEventListener('input', () => renderProviderChips($('#s-base').value.trim()));
+
 $('#btn-settings').addEventListener('click', async () => {
   const cfg = await API.get('/api/config');
   $('#s-base').value = cfg.baseUrl || '';
   $('#s-model').value = cfg.model || '';
   $('#s-key').value = '';
   $('#s-key').placeholder = cfg.keyMasked ? `已設定（${cfg.keyMasked}）— 輸入以取代` : 'sk-…';
-  $('#settings-status').textContent = cfg.keyInEnv ? '（API key 來自 .env 檔案）' : '';
+  $('#settings-status').textContent = '';
+  $('#test-result').innerHTML = '';
+  renderProviderChips((cfg.baseUrl || '').replace(/\/+$/, ''));
   modal.classList.remove('hidden');
 });
 $('#btn-close-settings').addEventListener('click', () => modal.classList.add('hidden'));
 modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
 
-$('#btn-save-settings').addEventListener('click', async () => {
-  const body = { baseUrl: $('#s-base').value, model: $('#s-model').value };
+function settingsPayload() {
+  const body = { baseUrl: $('#s-base').value.trim(), model: $('#s-model').value.trim() };
   const key = $('#s-key').value.trim();
   if (key) body.apiKey = key;
+  return body;
+}
+
+$('#btn-save-settings').addEventListener('click', async () => {
   try {
-    const cfg = await API.post('/api/config', body);
+    const cfg = await API.post('/api/config', settingsPayload());
     renderAiBadge(cfg);
     $('#settings-status').textContent = '✅ 已儲存';
-    setTimeout(() => modal.classList.add('hidden'), 600);
+    setTimeout(() => modal.classList.add('hidden'), 700);
   } catch (err) {
     $('#settings-status').textContent = `❌ ${err.message}`;
+  }
+});
+
+// Real connection test with whatever is in the form right now (saved or not).
+$('#btn-test-settings').addEventListener('click', async () => {
+  const btn = $('#btn-test-settings');
+  const out = $('#test-result');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> 測試中…`;
+  out.innerHTML = '';
+  try {
+    const r = await API.post('/api/config/test', settingsPayload());
+    out.innerHTML = r.ok
+      ? `<div class="test-ok">✅ 連接成功！模型 <strong>${esc(r.model)}</strong> 回覆：${esc(r.sample || 'OK')}<br>按「💾 儲存」正式生效。</div>`
+      : `<div class="test-fail">❌ 測試失敗${r.status ? `（HTTP ${r.status}）` : ''}<br>${esc(r.hint || '')}</div>`;
+  } catch (err) {
+    out.innerHTML = `<div class="test-fail">❌ ${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔌 測試連接 Test';
   }
 });
 
