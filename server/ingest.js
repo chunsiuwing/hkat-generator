@@ -1,10 +1,11 @@
 // Step 1 of "AI maintains the database": turn an uploaded PDF's raw text into a structured sample.
 import { chatJSON } from './ai.js';
-import { TYPE_IDS, LEVELS } from './question-types.js';
+import { LEVELS, typeIdsFor, fallbackTypeFor, EN_TO_ZH_TYPE, EN_CATEGORIES, ZH_CATEGORIES } from './question-types.js';
 import { countWords } from './pdf.js';
 
 export function structurePrompt(rawText) {
-  const typeList = TYPE_IDS.map((id) => `  - "${id}"`).join('\n');
+  const enList = EN_CATEGORIES.map((t) => `  - "${t.id}" = ${t.en} / ${t.zh} — ${t.descEn}`).join('\n');
+  const zhList = ZH_CATEGORIES.map((t) => `  - "${t.id}" = ${t.zh} — ${t.descZh}`).join('\n');
   const levelList = LEVELS.map((l) => `  - "${l.id}" = ${l.en} (${l.zh})`).join('\n');
 
   return {
@@ -15,8 +16,11 @@ Rules:
 - If the PDF holds several exercises, use the FIRST complete one (one passage + its questions).
 - Detect the language of the passage: "en" (English) or "zh" (Chinese).
 - Detect the level from the content difficulty: "p4", "p5", "p6" or "unknown".
-- Classify every question with exactly one of these type ids:
-${typeList}
+- Classify every question with exactly one type id from the list matching the passage's language.
+  ENGLISH passages — use ONLY these ids:
+${enList}
+  CHINESE passages — use ONLY these ids (HKAT 中文閱讀理解分類):
+${zhList}
 - Levels: 
 ${levelList}
 - Keep every answer key / marking scheme that appears in the PDF.
@@ -53,10 +57,16 @@ export function normaliseSample(parsed, rawText) {
   const language = parsed.language === 'zh' ? 'zh' : parsed.language === 'en' ? 'en' : (/[\u4e00-\u9fff]/.test((parsed.passage || '').slice(0, 200)) ? 'zh' : 'en');
   const level = LEVELS.some((l) => l.id === parsed.level) ? parsed.level : 'unknown';
   const passage = String(parsed.passage || '').trim() || rawText.slice(0, 20000).trim();
+  const valid = typeIdsFor(language);
   const questions = Array.isArray(parsed.questions)
     ? parsed.questions.map((q, i) => ({
         no: Number(q.no) || i + 1,
-        type: TYPE_IDS.includes(q.type) ? q.type : 'keywords',
+        // Accept only ids from the language's own taxonomy; map legacy 8-type ids for Chinese.
+        type: valid.includes(q.type)
+          ? q.type
+          : language === 'zh' && EN_TO_ZH_TYPE[q.type]
+            ? EN_TO_ZH_TYPE[q.type]
+            : fallbackTypeFor(language),
         marks: Number(q.marks) || 1,
         instruction: String(q.instruction || ''),
         stem: String(q.stem || q.question || ''),
@@ -100,9 +110,9 @@ export function mockStructuredSample(rawText) {
       language: 'zh', level: 'p5', title: '難忘的生日會', topic: '家庭 生日',
       passage: '上星期六是奶奶的七十歲生日……\n\n一大早，媽媽便到街市買菜……',
       questions: [
-        { no: 1, type: 'keywords', marks: 2, instruction: '根據文章，回答下列問題。', stem: '家人怎樣為奶奶準備生日會？', options: [], answer: '他們買菜、訂蛋糕和佈置客廳。', explanation: '' },
-        { no: 2, type: 'referencing', marks: 1, instruction: '「它」在文中指的是甚麼？', stem: '第三段中的「它」指的是甚麼？', options: [], answer: '生日蛋糕', explanation: '' },
-        { no: 3, type: 'unfamiliar_word', marks: 1, instruction: '解釋下列詞語在文中的意思。', stem: '「欣喜」在文中的意思是甚麼？', options: [], answer: '高興、開心', explanation: '' },
+        { no: 1, type: 'detail_facts', marks: 2, instruction: '根據文章，回答下列問題。', stem: '家人怎樣為奶奶準備生日會？', options: [], answer: '他們買菜、訂蛋糕和佈置客廳。', explanation: '' },
+        { no: 2, type: 'pronoun_ref', marks: 1, instruction: '「它」在文中指的是甚麼？', stem: '第三段中的「它」指的是甚麼？', options: [], answer: '生日蛋糕', explanation: '' },
+        { no: 3, type: 'word_meaning', marks: 1, instruction: '解釋下列詞語在文中的意思。', stem: '「欣喜」在文中的意思是甚麼？', options: [], answer: '高興、開心', explanation: '' },
       ],
       style_notes: '題目用語簡潔，每題 1–2 分。',
     };

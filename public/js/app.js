@@ -17,6 +17,20 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const typeById = (id) => state.meta?.questionTypes.find((t) => t.id === id);
+
+// Label for ANY category id across both taxonomies (samples may use Chinese ids).
+function typeLabelAny(id) {
+  const cats = state.meta?.categories;
+  if (cats) {
+    const en = (cats.en || []).find((t) => t.id === id);
+    if (en) return en.zh;
+    for (const g of cats.zh || []) {
+      const zh = (g.items || []).find((t) => t.id === id);
+      if (zh) return zh.zh;
+    }
+  }
+  return typeById(id)?.zh || id;
+}
 const levelById = (id) => state.meta?.levels.find((l) => l.id === id);
 
 /* ------------------------- tabs ------------------------- */
@@ -86,7 +100,7 @@ function renderSamples(stale) {
     ? `<div class="info-box">⚠️ 資料庫有新樣本，建議重新<a href="#" id="link-analyse">分析資料庫</a>，令生成風格更準確。</div>`
     : '';
   list.innerHTML = staleNote + state.samples.map((s) => {
-    const types = (s.question_types || []).map((t) => `<span class="badge type">${esc(typeById(t)?.zh || t)}</span>`).join('');
+    const types = (s.question_types || []).map((t) => `<span class="badge type">${esc(typeLabelAny(t))}</span>`).join('');
     return `<div class="sample-row">
       <div class="sample-main">
         <div class="sample-title">${esc(s.title || s.filename)} ${statusBadge(s)}</div>
@@ -126,7 +140,7 @@ $('#samples-list').addEventListener('click', async (e) => {
   } else if (btn.dataset.act === 'view') {
     const { sample, raw } = await API.get(`/api/samples/${id}`);
     const qs = (sample.questions || []).map((q) =>
-      `<li><strong>${q.no}. [${esc(typeById(q.type)?.zh || q.type)}] ${esc(q.stem)}</b></strong>${q.options?.length ? `<br>選項：${q.options.map(esc).join(' / ')}` : ''}<br>答案：${esc(q.answer)}</li>`
+      `<li><strong>${q.no}. [${esc(typeLabelAny(q.type))}] ${esc(q.stem)}</b></strong>${q.options?.length ? `<br>選項：${q.options.map(esc).join(' / ')}` : ''}<br>答案：${esc(q.answer)}</li>`
     ).join('');
     openInfoModal(
       `${sample.title || sample.filename}`,
@@ -214,13 +228,24 @@ function barBlock(title, obj, labelMap) {
 function renderStats(stats) {
   if (!stats) return;
   const levelMap = { p4: '小四 P4', p5: '小五 P5', p6: '小六 P6', unknown: '未定' };
-  const typeMap = {};
-  for (const t of state.meta?.questionTypes || []) typeMap[t.id] = t.zh;
-  $('#stats-charts').innerHTML = [
+  const cats = state.meta?.categories || { en: [], zh: [] };
+  const enMap = {};
+  for (const c of cats.en || []) enMap[c.id] = c.zh;
+  const zhMap = {};
+  for (const g of cats.zh || []) for (const c of g.items || []) zhMap[c.id] = c.zh;
+  // byType is now { en: {...}, zh: {...} } — one block per language's own taxonomy.
+  const byType = stats.byType || {};
+  const blocks = [
     barBlock('程度分佈 Level', stats.byLevel, levelMap),
     barBlock('語言 Language', stats.byLanguage, { en: 'English', zh: '中文' }),
-    barBlock('題型比例 Question types', stats.byType, typeMap),
-  ].join('');
+  ];
+  if (byType.en && Object.values(byType.en).some((v) => v > 0)) {
+    blocks.push(barBlock('英文題型分佈 English question types', byType.en, enMap));
+  }
+  if (byType.zh && Object.values(byType.zh).some((v) => v > 0)) {
+    blocks.push(barBlock('中文題型分佈 Chinese question types', byType.zh, zhMap));
+  }
+  $('#stats-charts').innerHTML = blocks.join('');
 }
 
 async function runAnalysis() {
@@ -244,6 +269,13 @@ function renderProfile(analysis) {
   const box = $('#analysis-profile');
   if (!analysis?.profile) { box.innerHTML = ''; return; }
   const p = analysis.profile;
+  // Label lookup within ONE language's own taxonomy.
+  const catLabel = (lang, id) => {
+    const cats = state.meta?.categories || {};
+    const list = lang === 'zh' ? (cats.zh || []).flatMap((g) => g.items || []) : (cats.en || []);
+    const c = list.find((x) => x.id === id);
+    return c ? `${c.zh}${c.en ? ' / ' + c.en : ''}` : id;
+  };
   let html = `<div class="profile-summary"><strong>📋 風格檔摘要</strong><br>${esc(p.summary || '')}</div>`;
   const langs = Object.entries(p.by_language || {});
   html += langs.map(([lang, L]) => {
@@ -254,15 +286,13 @@ function renderProfile(analysis) {
          ${info.sentence_length_guide ? `<div class="muted small">句子：${esc(info.sentence_length_guide)}</div>` : ''}
          ${info.vocabulary_range?.length ? `<div class="muted small">詞彙：${info.vocabulary_range.map(esc).join(', ')}</div>` : ''}
        </div>`).join('');
-    const patternCards = Object.entries(L.question_patterns || {}).map(([type, pat]) => {
-      const t = typeById(type);
-      return `<div class="pattern-card">
-        <h4>${esc(t?.zh || type)} / ${esc(t?.en || '')} ${pat.share ? `<span class="badge">${esc(pat.share)}</span>` : ''}</h4>
+    const patternCards = Object.entries(L.question_patterns || {}).map(([type, pat]) =>
+      `<div class="pattern-card">
+        <h4>${esc(catLabel(lang, type))} ${pat.share ? `<span class="badge">${esc(pat.share)}</span>` : ''}</h4>
         <div class="muted small">${esc(pat.notes || '')}</div>
         ${pat.sample_stems?.length ? `<ul>${pat.sample_stems.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>` : ''}
         ${pat.answer_format ? `<div class="muted small">答案格式：${esc(pat.answer_format)}</div>` : ''}
-      </div>`;
-    }).join('');
+      </div>`).join('');
     return `<h3 style="margin-top:18px">${lang === 'zh' ? '中文' : 'English'}</h3>
       ${L.passage_guidance ? `<p>${esc(L.passage_guidance)}</p>` : ''}
       ${L.conventions ? `<p class="muted small">格式慣例：${esc(L.conventions)}</p>` : ''}

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { EN_TO_ZH_TYPE } from './question-types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = join(__dirname, '..');
@@ -129,13 +130,17 @@ export function getSample(id) {
 export function getSamplesForPrompt({ language, level, types = [], topic = '' }) {
   const rows = all(`SELECT * FROM samples WHERE status = 'processed' AND passage_text != ''`);
   const topicWords = topic.toLowerCase().split(/[\s,，。、]+/).filter((w) => w.length > 1);
+  // Generation types are the original 8; Chinese samples are tagged with the Chinese
+  // taxonomy, so map each requested type to its nearest Chinese equivalent too.
+  const zhEquiv = new Set(types.map((t) => EN_TO_ZH_TYPE[t]).filter(Boolean));
   const scored = rows.map((r) => {
     let score = 0;
     if (language && r.language === language) score += 3;
     if (level && r.level === level) score += 3;
     let sampleTypes = [];
     try { sampleTypes = JSON.parse(r.question_types || '[]'); } catch { sampleTypes = []; }
-    const overlap = types.filter((t) => sampleTypes.includes(t)).length;
+    const overlap = types.filter((t) => sampleTypes.includes(t)).length
+      + (r.language === 'zh' ? [...zhEquiv].filter((t) => sampleTypes.includes(t)).length : 0);
     score += overlap;
     const hay = `${r.topic} ${r.title} ${r.passage_text}`.toLowerCase();
     score += topicWords.filter((w) => hay.includes(w)).length * 2;

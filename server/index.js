@@ -20,7 +20,7 @@ import { buildDocx } from './docx.js';
 import { markSubmission } from './mark.js';
 import { ocrPdf, ocrImage, OCR_LANGUAGES } from './ocr.js';
 import { getAIConfigStatus, setAIConfig, AIError, PROVIDERS, testAIConnection, friendlyAIError } from './ai.js';
-import { QUESTION_TYPES, LEVELS } from './question-types.js';
+import { QUESTION_TYPES, LEVELS, categoryMeta } from './question-types.js';
 import { randomBytes } from 'node:crypto';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -160,6 +160,7 @@ app.get('/api/meta', (req, res) => {
   res.json({
     questionTypes: QUESTION_TYPES,
     levels: LEVELS,
+    categories: categoryMeta(),  // per-language analysis taxonomies: { en: [...], zh: [groups] }
     ai: getAIConfigStatus(),
     providers: PROVIDERS,
     modes: MODES,
