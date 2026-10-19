@@ -10,17 +10,19 @@ import { fileURLToPath } from 'node:url';
 import {
   all, get, run, getSetting, setSetting, UPLOAD_DIR,
   listSamples, getSample, saveAnalysis, getAnalysis, processedSampleCount, safeParse,
-  getPaper, getPaperByToken, setShareToken, saveSubmission, listSubmissions, submissionCount,
+  getPaper, getPaperByToken, setShareToken, saveSubmission, listSubmissions, submissionCount, saveHistory,
+  indexPaperIntoBank, removeBankForPaper, searchBank, deleteBankItem, getBankItem,
 } from './db.js';
 import { extractPdfText, normalizePages, countWords } from './pdf.js';
 import { structureSample, normaliseSample, fallbackSample } from './ingest.js';
 import { computeStats, runAnalysis, analysisStale } from './analyze.js';
 import { generateSet, MODES } from './generate.js';
 import { buildDocx } from './docx.js';
+import { renderPrintHtml } from './print.js';
 import { markSubmission } from './mark.js';
 import { ocrPdf, ocrImage, OCR_LANGUAGES } from './ocr.js';
 import { getAIConfigStatus, setAIConfig, AIError, PROVIDERS, testAIConnection, friendlyAIError } from './ai.js';
-import { QUESTION_TYPES, LEVELS, categoryMeta } from './question-types.js';
+import { QUESTION_TYPES, LEVELS, categoryMeta, typeLabel } from './question-types.js';
 import { randomBytes } from 'node:crypto';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -41,8 +43,8 @@ const upload = multer({
   }),
   limits: { fileSize: 30 * 1024 * 1024, files: 20 },
   fileFilter: (req, file, cb) => {
-    if (/pdf$/i.test(file.mimetype) || /\.(pdf|jpe?g|png)$/i.test(file.originalname)) cb(null, true);
-    else cb(new Error('只接受 PDF 或圖片檔（PDF / JPG / PNG，掃描檔會自動 OCR）'));
+    if (/pdf$/i.test(file.mimetype) || /\.(pdf|jpe?g|png|docx)$/i.test(file.originalname)) cb(null, true);
+    else cb(new Error('只接受 PDF、Word (.docx) 或圖片檔（掃描檔會自動 OCR）/ PDF, Word (.docx) or images only'));
   },
 });
 
@@ -96,6 +98,11 @@ async function processSample(id, filePath) {
         // Photo / scan of a page → straight to OCR.
         run(`UPDATE samples SET status = 'ocring' WHERE id = ?`, [id]);
         rawText = await ocrImage(buffer, { languages: ocrLang });
+        pages = 1;
+      } else if (/\.docx$/i.test(row.filename)) {
+        // Word document → extract paragraphs directly (no OCR needed).
+        const { extractDocxText } = await import('./office.js');
+        rawText = await extractDocxText(buffer);
         pages = 1;
       } else {
         const extracted = await extractPdfText(buffer);
@@ -295,7 +302,7 @@ app.get('/api/share/:token', (req, res) => {
       language: paper.language,
       level: paper.params?.level,
       questions: (paper.questions || []).map((q) => ({
-        no: q.no, type: q.type, marks: q.marks, instruction: q.instruction, stem: q.stem, options: q.options,
+        no: q.no, type: q.type, label: typeLabel(q.type), marks: q.marks, instruction: q.instruction, stem: q.stem, options: q.options,
       })),
     },
   });
@@ -323,7 +330,12 @@ app.get('/api/papers/:id/docx', async (req, res, next) => {
     const paper = getPaper(Number(req.params.id));
     if (!paper) return res.status(404).json({ error: '找不到這份練習 (paper not found)' });
     const version = req.query.version === 'teacher' ? 'teacher' : 'student';
-    const buffer = await buildDocx(paper, version);
+    const layout = {
+      lines: ['0', '1', '2', '3'].includes(String(req.query.lines)) ? String(req.query.lines) : 'auto',
+      fontScale: ['90', '100', '110', '125'].includes(String(req.query.font)) ? Number(req.query.font) : 100,
+      nameField: String(req.query.name || '') === '1',
+    };
+    const buffer = await buildDocx(paper, version, layout);
     const name = `${String(paper.title || 'comprehension').replace(/[\\/:*?"<>|]+/g, '_')}-${version}.docx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
@@ -386,7 +398,94 @@ app.get('/api/history/:id', (req, res) => {
 
 app.delete('/api/history/:id', (req, res) => {
   run('DELETE FROM history WHERE id = ?', [Number(req.params.id)]);
+  removeBankForPaper(Number(req.params.id)); // drop its questions from the bank too
   res.json({ ok: true });
+});
+
+/* ----------------------------- API: question bank ----------------------------- */
+
+// Search the reusable question bank (built from every generated paper).
+app.get('/api/bank', (req, res) => {
+  const { language = '', level = '', q = '', page = 1, pageSize = 50 } = req.query;
+  const types = String(req.query.types || '').split(',').map((s) => s.trim()).filter(Boolean);
+  res.json(searchBank({ language, level, q, types, page: Number(page), pageSize: Number(pageSize) }));
+});
+
+// Remove a single question from the bank (does not touch the source paper).
+app.delete('/api/bank/:id', (req, res) => {
+  deleteBankItem(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// Compose a brand-new paper from hand-picked bank questions.
+app.post('/api/bank/compose', (req, res) => {
+  const { title = '', items = [] } = req.body || {};
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: '請先選擇要加入的題目。' });
+  const rows = items.map((it) => getBankItem(Number(it.id ?? it))).filter(Boolean);
+  if (!rows.length) return res.status(400).json({ error: '找不到所選題目。' });
+
+  const questions = rows.map((r, i) => ({
+    no: i + 1, type: r.type, marks: r.marks || 1, instruction: r.instruction || '',
+    stem: r.stem, options: r.options || [], answer: r.answer, explanation: r.explanation,
+  }));
+  const language = rows[0].language || 'en';
+  const level = rows[0].level || 'p5';
+  const totalMarks = questions.reduce((s, q) => s + (q.marks || 1), 0);
+
+  const paperId = saveHistory({
+    params: { mode: 'compose', language, level, questionCount: questions.length, composed: true },
+    language,
+    title: String(title || '').trim() || `自組練習 Composed set (${questions.length} 題)`,
+    passage: '',
+    wordCount: 0,
+    questions,
+    source: 'compose',
+  });
+  const paper = getPaper(paperId);
+  res.json({ paper, totalMarks });
+});
+
+/* ----------------------------- API: edit a paper ----------------------------- */
+
+// Update a paper's questions / metadata in place (also re-seeds its bank entries).
+app.patch('/api/papers/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const paper = getPaper(id);
+  if (!paper) return res.status(404).json({ error: '找不到這份練習 (paper not found)' });
+  const { title, passage, notes, questions } = req.body || {};
+  const qs = Array.isArray(questions)
+    ? questions.map((q, i) => ({
+        no: i + 1, type: q.type, marks: Number(q.marks) || 1, instruction: String(q.instruction || ''),
+        stem: String(q.stem || ''), options: Array.isArray(q.options) ? q.options.map(String) : [],
+        answer: String(q.answer || ''), explanation: String(q.explanation || ''),
+      }))
+    : paper.questions;
+  run('UPDATE history SET title = ?, passage = ?, questions = ?, word_count = ? WHERE id = ?', [
+    title != null ? String(title) : paper.title,
+    passage != null ? String(passage) : paper.passage,
+    JSON.stringify(qs),
+    passage != null ? countWords(String(passage), paper.language) : (paper.word_count ?? paper.wordCount ?? 0),
+    id,
+  ]);
+  // refresh this paper's bank entries so the bank matches the edited questions
+  // (composed papers borrow existing items — never re-index them)
+  if (paper.source !== 'compose') {
+    removeBankForPaper(id);
+    indexPaperIntoBank(id, paper.language, paper.params?.level || 'p5', qs);
+  }
+  res.json({ ok: true, paper: getPaper(id) });
+});
+
+/* ----------------------------- API: print layout ----------------------------- */
+
+app.get('/api/papers/:id/print', (req, res) => {
+  const paper = getPaper(Number(req.params.id));
+  if (!paper) return res.status(404).send('找不到這份練習 (paper not found)');
+  const version = req.query.version === 'teacher' ? 'teacher' : 'student';
+  const lines = ['0', '1', '2', '3'].includes(String(req.query.lines)) ? String(req.query.lines) : 'auto';
+  const fontScale = ['90', '100', '110', '125'].includes(String(req.query.font)) ? String(req.query.font) : '100';
+  const html = renderPrintHtml(paper, { version, lines, fontScale });
+  res.type('html').send(html);
 });
 
 /* ----------------------------- API: settings ----------------------------- */
@@ -431,6 +530,25 @@ app.post('/api/config/ocr', (req, res) => {
 app.get('/s/:token', (req, res) => {
   res.sendFile(join(__dirname, '..', 'public', 'student.html'));
 });
+
+/* ----------------------- startup: backfill question bank ----------------------- */
+// Papers created before the bank existed (or whose questions were edited) get indexed once.
+function backfillBank() {
+  const rows = all(`SELECT h.id, h.language, h.params, h.questions, h.source FROM history h WHERE h.error IS NULL`);
+  let added = 0;
+  for (const row of rows) {
+    const questions = safeParse(row.questions, []);
+    if (!questions.length) continue;
+    const params = safeParse(row.params, {});
+    // only index original papers that have no bank rows yet
+    if (row.source === 'compose') continue;
+    const already = Number(get('SELECT COUNT(*) AS c FROM bank_items WHERE paper_id = ?', [row.id])?.c || 0);
+    if (already) continue;
+    added += indexPaperIntoBank(row.id, row.language, params.level || 'p5', questions).length;
+  }
+  if (added) console.log(`[bank] backfilled ${added} questions into the question bank`);
+}
+backfillBank();
 
 /* ----------------------------- errors ----------------------------- */
 

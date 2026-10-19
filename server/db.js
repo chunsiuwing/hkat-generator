@@ -81,6 +81,25 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS bank_items (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id    INTEGER NOT NULL,
+  language    TEXT DEFAULT 'en',
+  level       TEXT DEFAULT 'p5',
+  type        TEXT DEFAULT 'keywords',
+  marks       INTEGER DEFAULT 1,
+  instruction TEXT DEFAULT '',
+  stem        TEXT DEFAULT '',
+  options     TEXT DEFAULT '[]',
+  answer      TEXT DEFAULT '',
+  explanation TEXT DEFAULT '',
+  created_at  TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_bank_paper ON bank_items(paper_id);
+CREATE INDEX IF NOT EXISTS idx_bank_lang_level ON bank_items(language, level);
+CREATE INDEX IF NOT EXISTS idx_bank_type ON bank_items(type);
 `);
 
 /* --------------- migrations for databases created before v1.1 --------------- */
@@ -186,7 +205,92 @@ export function saveHistory({ params, language, title, passage, wordCount, quest
       setId, variantNo, quality ? JSON.stringify(quality) : null, shareToken,
     ]
   );
-  return Number(res.lastInsertRowid);
+  const paperId = Number(res.lastInsertRowid);
+  // Every generated paper seeds the reusable question bank.
+  // Composed papers borrow existing bank items — do NOT re-index them.
+  if (source !== 'compose') indexPaperIntoBank(paperId, language, params?.level || 'p5', questions);
+  return paperId;
+}
+
+/* ---------------- question bank ---------------- */
+
+/** Save a paper's questions into the searchable bank. */
+export function indexPaperIntoBank(paperId, language, level, questions) {
+  const ids = [];
+  for (const q of questions || []) {
+    const res = run(
+      `INSERT INTO bank_items (paper_id, language, level, type, marks, instruction, stem, options, answer, explanation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(paperId), language || 'en', level || 'p5', q.type || 'keywords', Number(q.marks) || 1,
+        String(q.instruction || ''), String(q.stem || ''), JSON.stringify(q.options || []),
+        String(q.answer || ''), String(q.explanation || ''),
+      ]
+    );
+    ids.push(Number(res.lastInsertRowid));
+  }
+  return ids;
+}
+
+/** Remove bank entries that came from a paper (e.g. when it is deleted or re-indexed). */
+export function removeBankForPaper(paperId) {
+  const res = run('DELETE FROM bank_items WHERE paper_id = ?', [Number(paperId)]);
+  return res.changes;
+}
+
+/** Search the bank. `types` is a Set/array of type ids to filter by (optional). */
+export function searchBank({ language = '', level = '', q = '', types = [], page = 1, pageSize = 50 } = {}) {
+  const where = [];
+  const params = [];
+  if (language) { where.push('b.language = ?'); params.push(language); }
+  if (level) { where.push('b.level = ?'); params.push(level); }
+  if (Array.isArray(types) && types.length) {
+    where.push(`b.type IN (${types.map(() => '?').join(',')})`);
+    params.push(...types);
+  }
+  if (q) { where.push('(b.stem LIKE ? OR b.answer LIKE ? OR b.instruction LIKE ?)'); const like = `%${q}%`; params.push(like, like, like); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const total = Number(get(`SELECT COUNT(*) AS c FROM bank_items b ${whereSql}`, params)?.c || 0);
+  const pageSizeNum = Math.min(200, Math.max(10, Number(pageSize) || 50));
+  const pageNum = Math.max(1, Number(page) || 1);
+  const offset = (pageNum - 1) * pageSizeNum;
+  const rows = all(
+    `SELECT b.*, h.title AS source_title FROM bank_items b
+     LEFT JOIN history h ON h.id = b.paper_id
+     ${whereSql} ORDER BY b.id DESC LIMIT ? OFFSET ?`,
+    [...params, pageSizeNum, offset]
+  ).map((r) => ({
+    id: r.id,
+    paperId: r.paper_id,
+    sourceTitle: r.source_title || '',
+    language: r.language,
+    level: r.level,
+    type: r.type,
+    marks: r.marks,
+    instruction: r.instruction,
+    stem: r.stem,
+    options: safeParse(r.options, []),
+    answer: r.answer,
+    explanation: r.explanation,
+    createdAt: r.created_at,
+  }));
+  return { items: rows, total, page: pageNum, pageSize: pageSizeNum };
+}
+
+export function getBankItem(id) {
+  const r = get('SELECT * FROM bank_items WHERE id = ?', [Number(id)]);
+  if (!r) return null;
+  return {
+    id: r.id, paperId: r.paper_id, language: r.language, level: r.level, type: r.type,
+    marks: r.marks, instruction: r.instruction, stem: r.stem,
+    options: safeParse(r.options, []), answer: r.answer, explanation: r.explanation,
+  };
+}
+
+export function deleteBankItem(id) {
+  const res = run('DELETE FROM bank_items WHERE id = ?', [Number(id)]);
+  return res.changes;
 }
 
 /* ---------------- share links & student submissions ---------------- */
@@ -237,6 +341,7 @@ export function submissionCount(paperId) {
 function shapePaper(row) {
   return {
     ...row,
+    wordCount: row.word_count, // camelCase alias for API consumers
     params: safeParse(row.params, {}),
     questions: safeParse(row.questions, []),
     quality: safeParse(row.quality, null),

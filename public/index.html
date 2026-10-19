@@ -22,6 +22,7 @@
     <button class="tab active" data-tab="samples">📚 樣本庫 Samples <span id="tab-count-samples" class="tab-count"></span></button>
     <button class="tab" data-tab="analysis">📊 風格分析 Analysis <span id="tab-stale-dot" class="stale-dot hidden" title="資料庫有更新，請重新分析"></span></button>
     <button class="tab" data-tab="generate">✨ 生成 Generate</button>
+    <button class="tab" data-tab="bank">🧩 題庫 Bank <span id="tab-count-bank" class="tab-count"></span></button>
     <button class="tab" data-tab="history">🕘 歷史 History</button>
   </nav>
 
@@ -30,13 +31,34 @@
     <section id="tab-samples" class="panel active">
       <div class="card">
         <h2>上載 HKAT comprehension 樣本</h2>
-        <p class="muted">上載 PDF 後，AI 會自動抽出文章和題目，加入你的資料庫。資料庫越豐富，生成的題目就越似你自己的風格。</p>
+        <p class="muted">上載 PDF、Word (.docx) 或相片後，AI 會自動抽出文章和題目，加入你的資料庫。資料庫越豐富，生成的題目就越似你自己的風格。</p>
         <div id="dropzone" class="dropzone">
           <div class="drop-icon">📄</div>
-          <p><strong>拖拉 PDF 到這裡</strong>，或</p>
-          <button class="btn btn-primary" id="btn-choose">選擇 PDF 檔案 Choose files</button>
-          <input type="file" id="file-input" accept=".pdf,application/pdf" multiple hidden>
-          <p class="muted small">支援一次過上載多份 PDF（每份 ≤ 30MB）</p>
+          <p><strong>拖拉 PDF / Word / 相片到這裡</strong>，或</p>
+          <div class="upload-btns">
+            <button class="btn btn-primary" id="btn-choose">選擇檔案 Choose files</button>
+            <button class="btn btn-secondary" id="btn-camera">📷 拍照 Take photo</button>
+          </div>
+          <input type="file" id="file-input" accept=".pdf,.docx,.jpg,.jpeg,.png,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png" multiple hidden>
+          <p class="muted small">支援 PDF、Word (.docx)、JPG、PNG（每份 ≤ 30MB）。掃描檔／相片會自動 OCR。</p>
+        </div>
+        <div id="camera-modal" class="camera-modal hidden">
+          <div id="camera-error" class="camera-error hidden"></div>
+          <video id="camera-video" autoplay playsinline></video>
+          <canvas id="camera-canvas" class="hidden"></canvas>
+          <div class="camera-actions">
+            <button class="btn btn-primary" id="btn-capture">📸 影相 Capture</button>
+            <button class="btn btn-ghost" id="btn-camera-retry">🔁 重試 Retry</button>
+            <button class="btn btn-ghost" id="btn-camera-cancel">✕ 取消 Cancel</button>
+          </div>
+          <div id="camera-fallback" class="camera-fallback hidden">
+            <p class="muted small">瀏覽器相機開唔到，你可以：</p>
+            <div class="upload-btns">
+              <button class="btn btn-secondary" id="btn-camera-fallback-choose">📁 選擇已影嘅相 Choose a photo</button>
+              <label class="btn btn-secondary" for="camera-mobile-input">📱 用手機相機影 Take with phone camera</label>
+              <input type="file" id="camera-mobile-input" accept="image/*" capture="environment" hidden>
+            </div>
+          </div>
         </div>
         <details class="paste-box">
           <summary>沒有 PDF？直接貼上文字（文章＋題目）／ No PDF? Paste the text instead</summary>
@@ -98,6 +120,20 @@
               </div>
             </label>
 
+            <div class="field">
+              <span>文章來源 Passage source</span>
+              <div class="segmented" id="src-seg">
+                <button type="button" class="seg active" data-value="ai">🤖 AI 生成文章</button>
+                <button type="button" class="seg" data-value="own">📝 自己貼文章（只出題目）</button>
+              </div>
+            </div>
+
+            <div id="own-passage-box" class="field hidden">
+              <span>貼上你嘅文章 Paste your passage</span>
+              <textarea id="f-passage" rows="10" placeholder="在此貼上完整文章。AI 只會為呢篇文章出題，唔會改寫文章。&#10;Paste the full passage here — the AI will only write questions for it."></textarea>
+              <p class="muted small">字數會自動計算；主題／文章長度欄會自動隱藏。生成模式（變體／分程度）都適用：文章保持原樣，只換題目。</p>
+            </div>
+
             <label class="field">
               <span>生成模式 Mode</span>
               <div class="segmented" id="mode-seg">
@@ -108,17 +144,17 @@
               <p class="muted small" id="mode-note">生成一份練習。</p>
             </label>
 
-            <label class="field">
-              <span>主題 Topic</span>
-              <input type="text" id="f-topic" placeholder="e.g. 環保 environmental protection, a school sports day">
-            </label>
+            <div id="ai-only-fields">
+              <label class="field">
+                <span>主題 Topic</span>
+                <input type="text" id="f-topic" placeholder="e.g. 環保 environmental protection, a school sports day">
+              </label>
 
-            <label class="field">
-              <span>文章內容／大意 Passage theme <em class="opt">(選填 optional)</em></span>
-              <textarea id="f-theme" rows="2" placeholder="例如：一個學生在暴雨中幫助老人家的故事 / e.g. a story about helping an old man in a rainstorm"></textarea>
-            </label>
+              <label class="field">
+                <span>文章內容／大意 Passage theme <em class="opt">(選填 optional)</em></span>
+                <textarea id="f-theme" rows="2" placeholder="例如：一個學生在暴雨中幫助老人家的故事 / e.g. a story about helping an old man in a rainstorm"></textarea>
+              </label>
 
-            <div class="field-row">
               <label class="field">
                 <span>文章長度 Words</span>
                 <div class="num-control">
@@ -126,14 +162,13 @@
                 </div>
                 <input type="range" id="f-words-range" min="100" max="900" step="10" value="250">
               </label>
-              <label class="field">
-                <span>題目數量 Questions</span>
-                <div class="num-control">
-                  <input type="number" id="f-questions" min="1" max="20" value="5">
-                </div>
-                <input type="range" id="f-questions-range" min="1" max="20" value="5">
-              </label>
             </div>
+
+            <label class="field">
+              <span>總題數 Total questions</span>
+              <div class="total-box" id="f-total">5</div>
+              <span class="muted small">由每種題型嘅題數自動計算 Auto-summed from the per-type counts below</span>
+            </label>
 
             <label class="field">
               <span>程度 Level</span>
@@ -145,11 +180,11 @@
             </label>
 
             <div class="field">
-              <span>題型 Question types</span>
+              <span>題型與題數 Question types &amp; counts <em class="opt">(切換語言會換分類 / switch language to change taxonomy)</em></span>
               <div id="type-grid" class="type-grid"></div>
               <div class="type-quick">
-                <button type="button" class="btn btn-mini" id="btn-types-all">全選 All</button>
-                <button type="button" class="btn btn-mini" id="btn-types-none">全不選 None</button>
+                <button type="button" class="btn btn-mini" id="btn-types-all">每種各 1 題 One each</button>
+                <button type="button" class="btn btn-mini" id="btn-types-none">全清零 Clear</button>
               </div>
             </div>
 
@@ -180,13 +215,60 @@
               <button class="btn btn-mini" id="btn-docx-teacher">⬇️ Word 答案卷</button>
               <button class="btn btn-mini" id="btn-share">🧑‍🎓 學生連結</button>
               <button class="btn btn-mini" id="btn-results">📊 成績</button>
-              <button class="btn btn-mini" id="btn-print">🖨️ 列印</button>
+              <button class="btn btn-mini" id="btn-edit">✏️ 編輯</button>
+              <div class="print-wrap">
+                <button class="btn btn-mini" id="btn-print">🖨️ 列印</button>
+                <div class="print-pop hidden" id="print-pop">
+                  <label>版本
+                    <select id="pr-version"><option value="student">學生卷（有答案線）</option><option value="teacher">教師卷（含答案）</option></select>
+                  </label>
+                  <label>答案線
+                    <select id="pr-lines"><option value="auto">自動（按分數）</option><option value="0">無</option><option value="1">1 行</option><option value="2">2 行</option><option value="3">3 行</option></select>
+                  </label>
+                  <label>字體大小
+                    <select id="pr-font"><option value="90">細 90%</option><option value="100" selected>標準 100%</option><option value="110">大 110%</option><option value="125">特大 125%</option></select>
+                  </label>
+                  <button class="btn btn-primary btn-mini btn-block" id="btn-print-open">開啟列印版面 Open print view</button>
+                  <p class="muted small">喺新分頁開出 A4 版面，撳頁面嘅「🖨 列印」或 Ctrl+P。</p>
+                </div>
+              </div>
             </div>
           </div>
           <div id="variant-tabs" class="variant-tabs"></div>
           <div id="gen-status"></div>
           <div id="gen-result"><p class="muted">未有生成內容。請在左邊設定參數，然後按「生成練習」。</p></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ============ QUESTION BANK ============ -->
+    <section id="tab-bank" class="panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>🧩 題庫 Question bank</h2>
+          <span class="muted small" id="bank-total"></span>
+        </div>
+        <p class="muted">所有生成過嘅題目都會自動存入題庫。你可以篩選、勾選多條題目，然後組合成一份全新練習（例如：由三份舊卷抽主旨題拼成一份「主旨專練」）。</p>
+        <div class="bank-filters">
+          <select id="bank-lang"><option value="">全部語言</option><option value="en">English</option><option value="zh">中文</option></select>
+          <select id="bank-level"><option value="">全部程度</option><option value="p4">小四</option><option value="p5">小五</option><option value="p6">小六</option></select>
+          <select id="bank-type"><option value="">全部題型</option></select>
+          <input type="search" id="bank-q" placeholder="搜尋題目文字 Search stems…">
+          <button class="btn btn-secondary btn-mini" id="btn-bank-search">🔍 搜尋</button>
+        </div>
+        <div id="bank-list" class="bank-list"><p class="muted">載入中…</p></div>
+        <div class="bank-pager">
+          <button class="btn btn-mini" id="bank-prev">◀ 上一頁</button>
+          <span id="bank-page" class="muted small"></span>
+          <button class="btn btn-mini" id="bank-next">下一頁 ▶</button>
+        </div>
+      </div>
+      <div class="card" id="compose-card">
+        <div class="card-head"><h2>📝 拼卷 Compose <span id="compose-count" class="muted small"></span></h2></div>
+        <label class="field"><span>練習名稱 Title</span><input type="text" id="compose-title" placeholder="例如：主旨題加強練習 Main idea drill"></label>
+        <button class="btn btn-primary" id="btn-compose" disabled>🧩 組合成新卷 Compose paper</button>
+        <p class="muted small">勾選嘅題目會按你選擇嘅次序排列。如果題目來自唔同文章，新卷會係「混合練習」（每條題目保留自己嘅答案）。</p>
+        <div id="compose-list" class="compose-list"></div>
       </div>
     </section>
 

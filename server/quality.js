@@ -17,6 +17,10 @@ export async function selfCheck(paper, params) {
     null, 1
   );
 
+  const planText = params.typeCounts
+    ? Object.entries(params.typeCounts).map(([id, n]) => `${n}×${id}`).join(', ')
+    : (params.types || []).join(', ');
+
   const result = await chatJSON({
     system: `You are a meticulous HKAT chief marker checking a newly written comprehension paper.
 Check, in this order:
@@ -34,7 +38,7 @@ Reply with ONLY this JSON:
   ]
 }
 Only include a fix when you actually changed something. Fix, don't rewrite: keep the teacher's style.`,
-    user: `TARGET: ${langName} · ${levelName} · about ${params.wordLength} words · ${params.questionCount} questions · types: ${params.types.join(', ')}
+    user: `TARGET: ${langName} · ${levelName} · about ${params.wordLength} words · ${params.questionCount} questions · plan: ${planText}
 THEME: ${params.topic || '(any)'} ${params.theme || ''}
 
 PASSAGE:
