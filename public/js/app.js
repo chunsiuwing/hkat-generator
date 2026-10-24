@@ -182,6 +182,7 @@ async function doUpload(files) {
     box.innerHTML = parts.join('<br>') || '沒有新增檔案。';
     loadSamples();
   } catch (err) {
+    camLog('upload-failed', err.message);
     box.innerHTML = `<span class="error-box">${esc(err.message)}</span>`;
   }
 }
@@ -191,6 +192,34 @@ const camModal = $('#camera-modal');
 const camVideo = $('#camera-video');
 const camCanvas = $('#camera-canvas');
 let camStream = null;
+
+/* Diagnostic beacon: report every camera milestone/error to the server so the
+   teacher's failures can be diagnosed remotely (read via GET /api/camera-log). */
+function camLog(step, detail) {
+  try {
+    fetch('/api/camera-log', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ step, detail: String(detail || '').slice(0, 300), ua: navigator.userAgent.slice(0, 160) }),
+    }).catch(() => {});
+  } catch { /* never break the UI for logging */ }
+}
+
+/* Sample a tiny frame and check whether it is (near) uniformly black — the
+   classic "camera covered / held by another app" symptom. */
+function frameLooksBlack(video) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 32; c.height = 18;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, 32, 18);
+    const d = ctx.getImageData(0, 0, 32, 18).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+    const avg = sum / ((d.length / 4) * 3);
+    return avg < 12;
+  } catch { return false; }
+}
 
 /* The browser can refuse the camera for a few different reasons, and each
    needs a different message / fallback. */
@@ -227,6 +256,7 @@ function fallbackToFilePicker() {
 
 async function openCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    camLog('no-mediaDevices', navigator.userAgent);
     fallbackToFilePicker();
     return;
   }
@@ -235,11 +265,50 @@ async function openCamera() {
     camStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' } }, audio: false,
     });
+    camLog('stream-opened', `tracks=${camStream.getTracks().length}`);
     camVideo.srcObject = camStream;
     camVideo.classList.remove('hidden');
     $('#camera-error')?.classList.add('hidden');
     $('#camera-fallback')?.classList.add('hidden');
+
+    // If the device dies right after opening (busy/occupied), tell the teacher
+    // immediately instead of showing a frozen/black preview.
+    const track = camStream.getVideoTracks()[0];
+    if (track) track.addEventListener('ended', () => {
+      camLog('track-ended', `${track.label || 'video'} readyState=${track.readyState}`);
+      camVideo.classList.add('hidden');
+      const box = $('#camera-error');
+      if (box) {
+        box.innerHTML = '<strong>相機訊號中斷 Camera track ended</strong>\n鏡頭開咗但訊號即刻斷咗——通常係俾另一個程式佔用緊（例如另一個開住 webcam 的分頁／視像程式）。關掉嗰邊再撳「🔁 重試」。';
+        box.classList.remove('hidden');
+      }
+      $('#camera-fallback')?.classList.remove('hidden');
+    });
+
+    // Watchdog: stream granted but no frames (or only black frames) → surface it.
+    setTimeout(() => {
+      if (!camStream || camVideo.srcObject !== camStream) return;
+      const box = $('#camera-error');
+      if (!camVideo.videoWidth) {
+        camLog('no-frames', `readyState=${camVideo.readyState} trackState=${track?.readyState}`);
+        if (box) {
+          box.innerHTML = '<strong>相機開咗但冇畫面 No video frames</strong>\n權限正常，但鏡頭冇送畫面上嚟（可能被其他程式佔用，或驅動暫時無回應）。試下關閉其他用相機的程式，再撳「🔁 重試」。';
+          box.classList.remove('hidden');
+        }
+        $('#camera-fallback')?.classList.remove('hidden');
+        return;
+      }
+      if (frameLooksBlack(camVideo)) {
+        camLog('black-frame', `w=${camVideo.videoWidth} h=${camVideo.videoHeight}`);
+        if (box) {
+          box.innerHTML = '<strong>鏡頭有訊號但畫面全黑 Camera shows a black frame</strong>\n最常見原因：鏡頭被遮住（laptop 隱私滑蓋／貼紙）、或俾另一個程式霸住咗鏡頭。\n① 開 Windows「相機」App 睇吓有冇畫面 ② 閂晒其他用緊相機的分頁／程式 ③ 再撳「🔁 重試」。';
+          box.classList.remove('hidden');
+        }
+        $('#camera-fallback')?.classList.remove('hidden');
+      }
+    }, 3000);
   } catch (err) {
+    camLog('getusermedia-failed', `${err?.name}: ${err?.message}`);
     // Stop any partial stream but KEEP the modal open so the teacher can read
     // the fix instructions (closing it would hide the message).
     if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
@@ -272,11 +341,23 @@ function closeCamera() {
 
 function capturePhoto() {
   const w = camVideo.videoWidth, h = camVideo.videoHeight;
-  if (!w || !h) return alert('相機仲未准备好，請再試一次。');
+  if (!w || !h) {
+    camLog('capture-no-frames', `readyState=${camVideo.readyState}`);
+    return alert('相機仲未准备好，請再試一次。');
+  }
+  if (frameLooksBlack(camVideo)) {
+    camLog('capture-black', `${w}x${h}`);
+    const go = confirm('畫面睇落係全黑——相片可能冇任何內容（鏡頭被遮？），上傳咗都抽唔到文字。\n\n仍然要上傳嗎？\n（撳「取消」→ 推開鏡頭遮擋／閂其他用相機的程式 → 🔁 重試）');
+    if (!go) return;
+  }
   camCanvas.width = w; camCanvas.height = h;
   camCanvas.getContext('2d').drawImage(camVideo, 0, 0, w, h);
   camCanvas.toBlob((blob) => {
-    if (!blob) return alert('影相失敗，請再試一次。');
+    if (!blob) {
+      camLog('capture-blob-failed', `${w}x${h}`);
+      return alert('影相失敗，請再試一次。');
+    }
+    camLog('captured', `${w}x${h} bytes=${blob.size}`);
     closeCamera();
     doUpload([new File([blob], `photo-${Date.now()}.jpg`, { type: 'image/jpeg' })]);
   }, 'image/jpeg', 0.9);

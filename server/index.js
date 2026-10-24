@@ -180,6 +180,19 @@ app.get('/api/providers', (req, res) => res.json({ providers: PROVIDERS }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, processed: processedSampleCount() }));
 
+/* Camera diagnostics: the browser UI beacons camera milestones/errors here so
+   failures in any browser can be diagnosed from the server side. */
+const cameraLog = [];
+app.post('/api/camera-log', (req, res) => {
+  const { step = '', detail = '', ua = '' } = req.body || {};
+  const entry = { at: new Date().toISOString(), step: String(step), detail: String(detail).slice(0, 300), ua: String(ua).slice(0, 160) };
+  cameraLog.unshift(entry);
+  if (cameraLog.length > 30) cameraLog.pop();
+  console.log(`[camera] ${entry.step} ${entry.detail}`);
+  res.json({ ok: true });
+});
+app.get('/api/camera-log', (req, res) => res.json({ events: cameraLog }));
+
 /* ----------------------------- API: samples ----------------------------- */
 
 app.post('/api/samples/upload', upload.array('files', 20), (req, res) => {
