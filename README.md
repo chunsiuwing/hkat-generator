@@ -49,6 +49,30 @@ npm install        # 首次才需要
 
 首次啟動會自動建立 `.env`。打開瀏覽器到 **http://localhost:3000**。
 
+## 共享資料庫 / Shared seed data
+
+Repo 附帶一份「種子資料庫」（`seed/seed.json`），新老師 **clone 之後第一次啟動**會自動載入：
+
+```
+🌱 Loaded shared seed data — samples 6, papers 9, bank items 74
+```
+
+即時擁有：
+- **6 份已分析範文**（風格庫，可直接攞嚟生成）
+- **9 份舊試卷**（可預覽／列印／下載 Word）
+- **74 條題庫題目**（可搜尋、拼卷）
+
+> 種子檔**永遠唔會包含**：API key、學生答案。每人嘅 `data/app.db` 都係自己本機私有，互不相通；第一次載入後就算刪走 `seed/` 都唔會影響已有資料。
+
+你自己加咗新範文／試卷之後，想更新共享資料：
+
+```powershell
+npm run seed:export     # 重新匯出 seed/seed.json
+git add seed/seed.json
+git commit -m "Update shared seed data"
+git push
+```
+
 ## 設定 AI / AI setup
 
 程式支援任何 **OpenAI 相容 API**：OpenAI、DeepSeek、Groq、OpenRouter、Azure，或本地 Ollama / LM Studio。
@@ -154,8 +178,12 @@ hkat-generator/
 │  ├─ print.js      A4 列印版面（HTML，瀏覽器即場列印）
 │  └─ ai.js         OpenAI 相容 API 用戶端（含連接測試）
 ├─ public/          網頁介面（純 HTML/CSS/JS）＋學生練習頁 student.html
-├─ data/            app.db 及上載的 PDF（自動建立）
-└─ .env             API key 及設定
+├─ scripts/
+│  └─ export-seed.mjs  匯出共享種子資料（npm run seed:export）
+├─ seed/
+│  └─ seed.json     共享資料：範文風格庫＋舊試卷＋題庫（無 API key、無學生答案）
+├─ data/            app.db 及上載的 PDF（自動建立；私有，永不上傳）
+└─ .env             API key 及設定（私有，永不上傳）
 ```
 
 ## 資料私隱 / Privacy
@@ -163,3 +191,4 @@ hkat-generator/
 - 課文、題目、答案只存於本機 SQLite (`data/app.db`)。
 - 只有「分析」及「生成」時，相關文字才會發送到你自己設定的 AI 服務。
 - 上載時會做 SHA-256 去重，同一份 PDF 不會重複入庫。
+- `seed/seed.json` 公開內容只包含：範文（含抽取全文）、舊試卷、題庫題目；**不包含 API key 同學生答案**。若不想公開某份範文全文，不要重新執行 `seed:export` 即可。

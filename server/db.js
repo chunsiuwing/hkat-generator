@@ -1,6 +1,6 @@
 // SQLite database (built-in node:sqlite) — no native modules needed.
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EN_TO_ZH_TYPE } from './question-types.js';
@@ -117,6 +117,56 @@ db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_history_share ON history(share_to
 export const all = (sql, params = []) => db.prepare(sql).all(...params);
 export const get = (sql, params = []) => db.prepare(sql).get(...params);
 export const run = (sql, params = []) => db.prepare(sql).run(...params);
+
+/* --------------- shared seed data (auto-load on first run) ---------------
+   Teachers who clone the repo start with the shared samples style library,
+   generated papers and question bank. Only loads into a brand-new database
+   (no samples AND no bank items), so it never touches existing data.
+   The seed file itself is produced by:  npm run seed:export              */
+const SEED_PATH = join(ROOT_DIR, 'seed', 'seed.json');
+function maybeLoadSeed() {
+  try {
+    const existing = Number(get('SELECT COUNT(*) AS c FROM samples')?.c || 0)
+      + Number(get('SELECT COUNT(*) AS c FROM bank_items')?.c || 0);
+    if (existing > 0 || !existsSync(SEED_PATH)) return;
+    const seed = JSON.parse(readFileSync(SEED_PATH, 'utf8'));
+    const t = seed.tables || {};
+    db.exec('BEGIN');
+    for (const r of t.samples || []) run(
+      `INSERT INTO samples (id, filename, file_hash, file_size, pages, raw_text, language, level, title, topic, passage_text, word_count, question_count, question_types, questions, style_notes, status, error, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [r.id, r.filename, r.file_hash, r.file_size ?? 0, r.pages ?? 0, r.raw_text ?? '', r.language ?? 'unknown',
+       r.level ?? 'unknown', r.title ?? '', r.topic ?? '', r.passage_text ?? '', r.word_count ?? 0,
+       r.question_count ?? 0, r.question_types ?? '[]', r.questions ?? '[]', r.style_notes ?? '',
+       r.status ?? 'processed', r.error ?? null, r.created_at ?? null]
+    );
+    for (const r of t.analysis || []) run(
+      `INSERT OR REPLACE INTO analysis (id, profile, sample_count, languages, generated_at) VALUES (?,?,?,?,?)`,
+      [r.id, r.profile, r.sample_count ?? 0, r.languages ?? '[]', r.generated_at ?? null]
+    );
+    for (const r of t.history || []) run(
+      `INSERT INTO history (id, params, language, title, passage, word_count, questions, source, error, set_id, variant_no, quality, share_token, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)`,
+      [r.id, r.params, r.language ?? 'en', r.title ?? '', r.passage ?? '', r.word_count ?? 0,
+       r.questions ?? '[]', r.source ?? 'ai', r.error ?? null, r.set_id ?? null, r.variant_no ?? 1,
+       r.quality ?? null, r.created_at ?? null]
+    );
+    for (const r of t.bank_items || []) run(
+      `INSERT INTO bank_items (id, paper_id, language, level, type, marks, instruction, stem, options, answer, explanation, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [r.id, r.paper_id, r.language ?? 'en', r.level ?? 'p5', r.type ?? 'keywords', r.marks ?? 1,
+       r.instruction ?? '', r.stem ?? '', r.options ?? '[]', r.answer ?? '', r.explanation ?? '', r.created_at ?? null]
+    );
+    db.exec('COMMIT');
+    console.log(
+      `🌱 Loaded shared seed data — samples ${t.samples?.length || 0}, papers ${t.history?.length || 0}, bank items ${t.bank_items?.length || 0}`
+    );
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction open */ }
+    console.warn('[seed] load failed:', e.message);
+  }
+}
+maybeLoadSeed();
 
 export function getSetting(key) {
   const row = get('SELECT value FROM settings WHERE key = ?', [key]);
