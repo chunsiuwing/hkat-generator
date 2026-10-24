@@ -361,3 +361,29 @@ input[type="range"] { width: 100%; accent-color: var(--primary); margin-top: 6px
 }
 .compose-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compose-item .edit-tools { margin-left: 0; }
+
+/* ------------------------- web login ------------------------- */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(15, 18, 34, 0.92);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.login-overlay.hidden { display: none; }
+.login-card {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 28px 30px; width: min(92vw, 360px); text-align: center;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.login-card h2 { margin: 0; }
+.login-card input {
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 1rem; text-align: center;
+}
+.auth-card {
+  margin-top: 18px; border-top: 1px dashed var(--line); padding-top: 14px;
+}
+.auth-card h3 { margin: 0 0 6px; }
+.auth-card input {
+  flex: 1; min-width: 160px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+}

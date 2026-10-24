@@ -310,6 +310,28 @@
         <span id="settings-status" class="muted small"></span>
       </div>
       <div id="test-result"></div>
+
+      <div class="auth-card">
+        <h3>🔐 登入密碼 Login password</h3>
+        <p class="muted small">設咗密碼之後，所有出卷／題庫／設定功能都要先登入（保護你嘅 API key）。學生嘅分享連結唔受影響。</p>
+        <div class="card-actions">
+          <input type="password" id="s-new-password" placeholder="新密碼 New password（至少4字）" autocomplete="new-password">
+          <button class="btn btn-secondary" id="btn-save-password">💾 儲存密碼</button>
+          <button class="btn btn-ghost" id="btn-logout">🚪 登出 Logout</button>
+        </div>
+        <span id="auth-status" class="muted small"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ LOGIN OVERLAY ============ -->
+  <div id="login-overlay" class="login-overlay hidden">
+    <div class="login-card">
+      <h2>🔐 登入 Login</h2>
+      <p class="muted small">請輸入密碼繼續使用（保護你嘅 API key）</p>
+      <input type="password" id="login-password" placeholder="密碼 Password" autocomplete="current-password">
+      <div id="login-error" class="error-box hidden"></div>
+      <button class="btn btn-primary" id="btn-login">登入 Login</button>
     </div>
   </div>
 

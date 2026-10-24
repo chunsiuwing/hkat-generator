@@ -73,6 +73,23 @@ git commit -m "Update shared seed data"
 git push
 ```
 
+## 公開網址 / Public access
+
+**同一個 WiFi（屋企／學校）**：任何裝置直接開 `http://<你部電腦IP>:3000`（例如 `http://192.168.31.89:3000`）。IP 可以喺 Windows「設定 → 網路」度睇到。
+
+**出街都開到（公開網址）**：用免費 Cloudflare Tunnel，唔使開路由器、唔使固定 IP：
+
+```powershell
+.\start-public.cmd
+```
+
+彈出嘅「HKAT tunnel」視窗入面會顯示一個 `https://xxxx.trycloudflare.com` 網址——任何有瀏覽器嘅裝置（手機流量都得）都能開。
+
+> - **必須設密碼**：⚙️ 設定 → 「🔐 登入密碼」。冇密碼嘅人會見到登入頁，用唔到出卷／題庫功能。
+> - 學生嘅分享連結（`/s/…`）**唔受密碼影響**，可以直接派畀學生作答。
+> - 免費版 tunnel 每次重開會換新網址（重開 `start-public.cmd` 就知）；想固定網址可以申請 Cloudflare 帳號 + 網域做 named tunnel。
+> - 電腦要開機、兩個視窗（server + tunnel）要保持開住。
+
 ## 設定 AI / AI setup
 
 程式支援任何 **OpenAI 相容 API**：OpenAI、DeepSeek、Groq、OpenRouter、Azure，或本地 Ollama / LM Studio。
@@ -163,7 +180,8 @@ OPENAI_MODEL=deepseek/deepseek-chat
 ```
 hkat-generator/
 ├─ server/          Node + Express 本地伺服器
-│  ├─ index.js      API 路由（上載／生成／題庫／編輯／列印／分享）
+│  ├─ index.js      API 路由（上載／生成／題庫／編輯／列印／分享／登入）
+│  ├─ auth.js       單一密碼登入（保護出卷功能；學生分享連結不受影響）
 │  ├─ db.js         SQLite 資料庫（node:sqlite，免安裝原生模組；含題庫 bank_items）
 │  ├─ pdf.js        PDF 文字抽取及清理（unpdf / pdf.js）
 │  ├─ office.js     Word (.docx) 文字抽取（mammoth）

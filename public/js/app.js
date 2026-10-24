@@ -1365,3 +1365,48 @@ async function init() {
   }
 }
 init();
+
+/* ------------------------- web login ------------------------- */
+const loginOverlay = $('#login-overlay');
+const loginError = $('#login-error');
+
+function showLoginOverlay() {
+  loginOverlay.classList.remove('hidden');
+  setTimeout(() => $('#login-password')?.focus(), 50);
+}
+window.showLoginOverlay = showLoginOverlay; // called by api.js on HTTP 401
+
+async function doLogin() {
+  try {
+    await API.post('/api/auth/login', { password: $('#login-password').value });
+    loginError.classList.add('hidden');
+    $('#login-password').value = '';
+    location.reload();
+  } catch (err) {
+    loginError.textContent = err.message;
+    loginError.classList.remove('hidden');
+  }
+}
+$('#btn-login').addEventListener('click', doLogin);
+$('#login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+// On boot: if a password is set and we are not logged in, show the login card.
+API.get('/api/auth/status')
+  .then((s) => { if (s.passwordSet && !s.authed) showLoginOverlay(); })
+  .catch(() => {});
+
+/* settings: change password / logout */
+$('#btn-save-password')?.addEventListener('click', async () => {
+  const status = $('#auth-status');
+  try {
+    await API.post('/api/auth/password', { newPassword: $('#s-new-password').value });
+    $('#s-new-password').value = '';
+    status.textContent = '✅ 密碼已更新（其他裝置要重新登入）';
+  } catch (err) {
+    status.textContent = '❌ ' + err.message;
+  }
+});
+$('#btn-logout')?.addEventListener('click', async () => {
+  await API.post('/api/auth/logout', {}).catch(() => {});
+  location.reload();
+});

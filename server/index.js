@@ -23,6 +23,10 @@ import { markSubmission } from './mark.js';
 import { ocrPdf, ocrImage, OCR_LANGUAGES } from './ocr.js';
 import { getAIConfigStatus, setAIConfig, AIError, PROVIDERS, testAIConnection, friendlyAIError } from './ai.js';
 import { QUESTION_TYPES, LEVELS, categoryMeta, typeLabel } from './question-types.js';
+import {
+  requireAuth, checkPassword, createSession, destroySession, cookieToken,
+  sessionValid, setAuthCookie, clearAuthCookie, passwordSet, setWebPassword,
+} from './auth.js';
 import { randomBytes } from 'node:crypto';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -31,6 +35,43 @@ const PORT = Number(process.env.PORT) || 3000;
 const app = express();
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(join(__dirname, '..', 'public')));
+
+/* Everything below requires login (when a password is set). Static files,
+   /api/auth/*, /api/health and student share links stay open. */
+app.use(requireAuth);
+
+/* ---------------- web login ---------------- */
+app.get('/api/auth/status', (req, res) => {
+  res.json({ passwordSet: passwordSet(), authed: sessionValid(cookieToken(req)) });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { password = '' } = req.body || {};
+  const r = checkPassword(password);
+  if (!r.ok) {
+    return res.status(401).json({
+      error: r.locked ? `嘗試次數過多，請等 ${r.retryAfter} 秒再試 Too many attempts` : '密碼唔正確 Wrong password',
+    });
+  }
+  setAuthCookie(res, createSession());
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  destroySession(cookieToken(req));
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/password', (req, res) => {
+  const { newPassword = '' } = req.body || {};
+  if (String(newPassword).length < 4) {
+    return res.status(400).json({ error: '密碼至少要 4 個字 Password must be at least 4 characters' });
+  }
+  setWebPassword(String(newPassword)); // clears every session…
+  setAuthCookie(res, createSession());  // …but keeps THIS browser logged in
+  res.json({ ok: true });
+});
 
 const upload = multer({
   storage: multer.diskStorage({

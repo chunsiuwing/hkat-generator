@@ -6,6 +6,7 @@ const API = {
       ...options,
       body: options.body && !(options.body instanceof FormData) ? JSON.stringify(options.body) : options.body,
     });
+    if (res.status === 401 && typeof showLoginOverlay === 'function') showLoginOverlay();
     let data = null;
     try { data = await res.json(); } catch { data = null; }
     if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
